@@ -21,7 +21,7 @@
 
 ## Интерфейс
 
-<img src="docs/images/android-library.png" alt="Android-клиент Family Music" width="320">
+<img src="https://raw.githubusercontent.com/dgl-X/f-music-android/main/docs/images/android-library.png" alt="Android-клиент F-Music" width="320">
 
 ## Проверка исходного кода
 
@@ -323,7 +323,7 @@ FAMILY_MUSIC_SIGNING_PROPERTIES=/private/path/signing.properties \
 cp app/build/outputs/apk/release/app-release.apk ../builds/f_music_v1.0.22.apk
 ```
 
-Стабильные версии подписываются постоянным ключом и устанавливаются обновлением друг поверх друга. Ключ и пароль запрещено коммитить в Git. Полная безопасная процедура описана в [`RELEASE.md`](RELEASE.md).
+Стабильные версии подписываются постоянным ключом и устанавливаются обновлением друг поверх друга. Процедура выпуска описана в [`RELEASE.md`](RELEASE.md).
 
 ## Лицензия
 
