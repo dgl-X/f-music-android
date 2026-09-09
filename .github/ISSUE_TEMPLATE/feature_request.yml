@@ -1,0 +1,30 @@
+name: Предложить функцию Android
+description: Улучшение мобильного клиента Family Music
+title: "[Android идея]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: scenario
+    attributes:
+      label: Какой сценарий хочется решить?
+      description: Где и при каких условиях возникает потребность?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Предлагаемое поведение
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Устройство и версия Android
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Приватность
+      options:
+        - label: Я не приложил cookie, пароли, адрес личного сервера или персональные данные.
+          required: true
+

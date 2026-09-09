@@ -1,0 +1,93 @@
+name: Выпуск Android
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Получить исходный код
+        uses: actions/checkout@v5
+
+      - name: Установить Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+
+      - name: Проверить версию тега
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          expected="${RELEASE_TAG#v}"
+          actual="$(sed -n "s/^[[:space:]]*versionName '\([^']*\)'.*/\1/p" app/build.gradle)"
+          test -n "$actual"
+          test "$actual" = "$expected"
+
+      - name: Подготовить ключ подписи
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          test -n "$KEYSTORE_BASE64"
+          test -n "$KEYSTORE_PASSWORD"
+          test -n "$KEY_ALIAS"
+          test -n "$KEY_PASSWORD"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/family-music-release.jks"
+          {
+            printf 'storeFile=%s\n' "$RUNNER_TEMP/family-music-release.jks"
+            printf 'storePassword=%s\n' "$KEYSTORE_PASSWORD"
+            printf 'keyAlias=%s\n' "$KEY_ALIAS"
+            printf 'keyPassword=%s\n' "$KEY_PASSWORD"
+          } > "$RUNNER_TEMP/signing.properties"
+          chmod 600 "$RUNNER_TEMP/family-music-release.jks" "$RUNNER_TEMP/signing.properties"
+
+      - name: Собрать подписанный APK
+        env:
+          FAMILY_MUSIC_SIGNING_PROPERTIES: ${{ runner.temp }}/signing.properties
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon clean testDebugUnitTest assembleRelease
+
+      - name: Проверить подпись и подготовить файлы
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          version="${RELEASE_TAG#v}"
+          apk="f_music_v${version}.apk"
+          cp app/build/outputs/apk/release/app-release.apk "$apk"
+          build_tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -V | tail -1)"
+          test -n "$build_tools"
+          "$ANDROID_HOME/build-tools/$build_tools/apksigner" verify --verbose --print-certs "$apk"
+          sha256sum "$apk" > SHA256SUMS
+
+      - name: Создать GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          version="${RELEASE_TAG#v}"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "f_music_v${version}.apk" SHA256SUMS --clobber
+          else
+            gh release create "$RELEASE_TAG" \
+              --verify-tag \
+              --generate-notes \
+              --title "Family Music Android $RELEASE_TAG" \
+              "f_music_v${version}.apk" \
+              SHA256SUMS
+          fi
+
+      - name: Удалить ключ подписи
+        if: always()
+        run: rm -f "$RUNNER_TEMP/family-music-release.jks" "$RUNNER_TEMP/signing.properties"

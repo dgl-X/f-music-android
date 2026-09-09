@@ -1,0 +1,70 @@
+plugins {
+    id 'com.android.application'
+}
+
+def signingProperties = new Properties()
+def signingPropertiesPath = System.getenv('FAMILY_MUSIC_SIGNING_PROPERTIES')
+def serverOrigin = providers.gradleProperty('familyMusicServerOrigin').orElse('https://music.example.com').get()
+def applicationIdentifier = providers.gradleProperty('familyMusicApplicationId').orElse('org.familymusic.client').get()
+if (signingPropertiesPath) {
+    def signingPropertiesFile = file(signingPropertiesPath)
+    if (!signingPropertiesFile.exists()) throw new GradleException("Signing properties not found: ${signingPropertiesPath}")
+    signingPropertiesFile.withInputStream { signingProperties.load(it) }
+}
+
+android {
+    namespace 'org.familymusic.client'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId applicationIdentifier
+        minSdk 26
+        targetSdk 36
+        versionCode 122
+        versionName '1.0.22'
+        buildConfigField 'String', 'SERVER_ORIGIN', '"' + serverOrigin + '"'
+    }
+
+    signingConfigs {
+        if (signingPropertiesPath) {
+            release {
+                storeFile file(signingProperties['storeFile'])
+                storePassword signingProperties['storePassword']
+                keyAlias signingProperties['keyAlias']
+                keyPassword signingProperties['keyPassword']
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            if (signingPropertiesPath) signingConfig signingConfigs.release
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+}
+
+gradle.taskGraph.whenReady { graph ->
+    if (graph.allTasks.any { it.name.toLowerCase().contains('release') } && !signingPropertiesPath) {
+        throw new GradleException('Set FAMILY_MUSIC_SIGNING_PROPERTIES to build a signed release')
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.7.1'
+    implementation 'androidx.recyclerview:recyclerview:1.4.0'
+    implementation 'androidx.media3:media3-exoplayer:1.10.1'
+    implementation 'androidx.media3:media3-session:1.10.1'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20250517'
+}

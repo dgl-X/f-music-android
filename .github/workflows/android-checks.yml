@@ -1,0 +1,35 @@
+name: Сборка Android
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Получить исходный код
+        uses: actions/checkout@v5
+      - name: Установить Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+      - name: Разрешить запуск Gradle Wrapper
+        run: chmod +x gradlew
+      - name: Запустить тесты и собрать debug APK
+        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
+      - name: Сохранить APK проверки
+        uses: actions/upload-artifact@v6
+        with:
+          name: family-music-debug-${{ github.sha }}
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7

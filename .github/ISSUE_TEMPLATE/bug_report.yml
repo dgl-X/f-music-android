@@ -1,0 +1,33 @@
+name: Сообщить об ошибке Android
+description: Ошибка мобильного клиента Family Music
+title: "[Android]: "
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Версия приложения
+      placeholder: Например, 1.0.19
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Телефон и версия Android
+  - type: textarea
+    id: problem
+    attributes:
+      label: Что произошло?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Как повторить?
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Диагностический отчёт
+      description: Укажите время отправки отчёта через приложение. Не публикуйте cookie, пароли и адрес частного сервера.
