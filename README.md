@@ -21,7 +21,7 @@
 
 ## Интерфейс
 
-<img src="https://raw.githubusercontent.com/dgl-X/f-music-android/main/docs/images/android-library.png" alt="Android-клиент F-Music" width="320">
+<img src="docs/images/android-library.png" alt="Android-клиент F-Music" width="320">
 
 ## Проверка исходного кода
 
