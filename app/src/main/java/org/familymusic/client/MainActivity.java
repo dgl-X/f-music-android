@@ -1555,8 +1555,10 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         if (controller == null || controller.getCurrentMediaItem() == null) return;
         if (downloadedOnly || historyMode) { controller.setShuffleModeEnabled(true); updateFullPlayer(); savePlaybackState(); return; }
         String currentId = controller.getCurrentMediaItem().mediaId; long position = Math.max(0, controller.getCurrentPosition()); boolean playing = controller.isPlaying();
-        String seed = java.util.UUID.randomUUID().toString(); toast("Перемешиваем всю коллекцию…");
-        api.get("/tracks?sort=random&queue=1&offset=0&limit=10000&seed=" + Uri.encode(seed), new UiCallback() {
+        toast("Перемешиваем всю коллекцию…");
+        // Media3 owns the single shuffle order. Asking the server for an already
+        // randomized queue here used to shuffle it twice and broke intuitive Back.
+        api.get("/tracks?sort=newest&queue=1&offset=0&limit=10000", new UiCallback() {
             @Override void ok(JSONObject json) {
                 List<Track> tracks = tracksFrom(json); int currentIndex = 0;
                 for (int i = 0; i < tracks.size(); i++) if (tracks.get(i).id.equals(currentId)) { currentIndex = i; break; }
