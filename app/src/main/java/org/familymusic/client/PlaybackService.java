@@ -12,6 +12,7 @@ import android.media.audiofx.LoudnessEnhancer;
 import androidx.annotation.Nullable;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.Player;
+import androidx.media3.common.C;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.datasource.cache.CacheWriter;
 import androidx.media3.exoplayer.ExoPlayer;
@@ -32,7 +33,7 @@ public final class PlaybackService extends MediaSessionService {
     private MediaSession mediaSession;
     private final ExecutorService prefetchExecutor = Executors.newSingleThreadExecutor();
     private volatile CacheWriter activePrefetch;
-    private volatile String prefetchedMediaId = "";
+    private volatile long prefetchGeneration;
     private String cookie;
     private final Handler sleepHandler = new Handler(Looper.getMainLooper());
     private final Handler prefetchHandler = new Handler(Looper.getMainLooper());
@@ -54,7 +55,7 @@ public final class PlaybackService extends MediaSessionService {
             .setConstantBitrateSeekingEnabled(true)
             .setConstantBitrateSeekingAlwaysEnabled(true);
         DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
-            .setBufferDurationsMs(15_000, 90_000, 1_000, 2_000)
+            .setBufferDurationsMs(15_000, 180_000, 1_000, 2_000)
             .setBackBuffer(30_000, true)
             .build();
         ExoPlayer player = new ExoPlayer.Builder(this)
@@ -78,6 +79,10 @@ public final class PlaybackService extends MediaSessionService {
             @Override public void onRepeatModeChanged(int repeatMode) {
                 DiagnosticLog.add(PlaybackService.this, "repeat=" + repeatMode);
                 schedulePrefetch(player);
+            }
+            @Override public void onIsPlayingChanged(boolean isPlaying) {
+                if (isPlaying) schedulePrefetch(player);
+                else { prefetchHandler.removeCallbacksAndMessages(null); cancelPrefetch(); }
             }
             @Override public void onPositionDiscontinuity(Player.PositionInfo oldPosition, Player.PositionInfo newPosition, int reason) {
                 DiagnosticLog.add(PlaybackService.this, "position discontinuity reason=" + discontinuityName(reason) + " from=" + oldPosition.positionMs + " to=" + newPosition.positionMs + " oldTrack=" + oldPosition.mediaItemIndex + " newTrack=" + newPosition.mediaItemIndex);
@@ -191,40 +196,62 @@ public final class PlaybackService extends MediaSessionService {
     private void schedulePrefetch(ExoPlayer player) {
         prefetchHandler.removeCallbacksAndMessages(null);
         cancelPrefetch();
-        prefetchedMediaId = "";
         MediaItem current = player.getCurrentMediaItem();
         if (current == null) return;
         String currentId = current.mediaId;
         prefetchHandler.postDelayed(() -> {
             MediaItem actual = player.getCurrentMediaItem();
-            if (actual != null && actual.mediaId.equals(currentId)) prefetchNext(player);
-        }, 4000);
+            if (player.isPlaying() && actual != null && actual.mediaId.equals(currentId)) prefetchNext(player);
+        }, 3000);
     }
 
     private void prefetchNext(ExoPlayer player) {
         long prefetchBytes = new AppSettings(this).prefetchBytes();
-        if (prefetchBytes <= 0) { cancelPrefetch(); prefetchedMediaId = ""; return; }
+        if (prefetchBytes <= 0) { cancelPrefetch(); return; }
         int nextIndex = player.getNextMediaItemIndex();
-        if (nextIndex < 0 || nextIndex >= player.getMediaItemCount()) {
-            cancelPrefetch();
-            prefetchedMediaId = "";
-            return;
-        }
-        MediaItem next = player.getMediaItemAt(nextIndex);
-        if (next.mediaId.equals(prefetchedMediaId)) return;
+        MediaItem current = player.getCurrentMediaItem();
+        MediaItem next = nextIndex == C.INDEX_UNSET ? null : player.getMediaItemAt(nextIndex);
+        int secondIndex = nextIndex == C.INDEX_UNSET ? C.INDEX_UNSET : player.getCurrentTimeline().getNextWindowIndex(nextIndex, player.getRepeatMode(), player.getShuffleModeEnabled());
+        MediaItem second = secondIndex == C.INDEX_UNSET || secondIndex == player.getCurrentMediaItemIndex() ? null : player.getMediaItemAt(secondIndex);
         cancelPrefetch();
-        prefetchedMediaId = next.mediaId;
-        DiagnosticLog.add(this, "prefetch track=" + next.mediaId + " bytes=" + prefetchBytes);
+        long generation = prefetchGeneration;
+        boolean unmetered = isUnmeteredNetwork();
+        DiagnosticLog.add(this, "prefetch next=" + (next == null ? "none" : next.mediaId) + " second=" + (second == null ? "none" : second.mediaId) + " bytes=" + prefetchBytes + " unmetered=" + unmetered);
         prefetchExecutor.execute(() -> {
-            CacheWriter writer = PlaybackCache.get(this).prefetchWriter(next, cookie, prefetchBytes);
-            if (writer == null || !next.mediaId.equals(prefetchedMediaId)) return;
-            activePrefetch = writer;
-            try { writer.cache(); } catch (Exception ignored) {
-            } finally { if (activePrefetch == writer) activePrefetch = null; }
+            prefetchPart(next, prefetchBytes, generation);
+            if (unmetered) prefetchComplete(current, generation);
+            prefetchPart(second, prefetchBytes, generation);
         });
     }
 
+    private void prefetchPart(MediaItem item, long bytes, long generation) {
+        if (item == null || generation != prefetchGeneration) return;
+        CacheWriter writer = PlaybackCache.get(this).prefetchWriter(item, cookie, bytes);
+        runPrefetch(writer, generation);
+    }
+
+    private void prefetchComplete(MediaItem item, long generation) {
+        if (item == null || generation != prefetchGeneration) return;
+        CacheWriter writer = PlaybackCache.get(this).completeWriter(item, cookie, 64L * 1024L * 1024L);
+        runPrefetch(writer, generation);
+    }
+
+    private void runPrefetch(CacheWriter writer, long generation) {
+        if (writer == null || generation != prefetchGeneration) return;
+        activePrefetch = writer;
+        try { writer.cache(); } catch (Exception ignored) {
+        } finally { if (activePrefetch == writer) activePrefetch = null; }
+    }
+
+    private boolean isUnmeteredNetwork() {
+        if (connectivityManager == null) return false;
+        Network network = connectivityManager.getActiveNetwork();
+        NetworkCapabilities capabilities = network == null ? null : connectivityManager.getNetworkCapabilities(network);
+        return capabilities != null && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED);
+    }
+
     private void cancelPrefetch() {
+        prefetchGeneration++;
         CacheWriter writer = activePrefetch;
         if (writer != null) writer.cancel();
         activePrefetch = null;

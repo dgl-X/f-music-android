@@ -13,6 +13,7 @@ import androidx.media3.datasource.DefaultDataSource;
 import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.datasource.cache.CacheDataSource;
 import androidx.media3.datasource.cache.CacheWriter;
+import androidx.media3.datasource.cache.ContentMetadata;
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor;
 import androidx.media3.datasource.cache.SimpleCache;
 
@@ -63,6 +64,18 @@ final class PlaybackCache {
                 .setPosition(0)
                 .setLength(bytes)
                 .build();
+        return new CacheWriter(source, request, null, null);
+    }
+
+    CacheWriter completeWriter(MediaItem item, String cookie, long maxBytes) {
+        MediaItem.LocalConfiguration local = item.localConfiguration;
+        if (local == null || local.customCacheKey == null) return null;
+        if (!"http".equals(local.uri.getScheme()) && !"https".equals(local.uri.getScheme())) return null;
+        String key = local.customCacheKey;
+        long length = ContentMetadata.getContentLength(cache.getContentMetadata(key));
+        if (length <= 0 || length > maxBytes || cache.getCachedBytes(key, 0, length) >= length) return null;
+        CacheDataSource source = (CacheDataSource) streamingFactory(cookie).createDataSource();
+        DataSpec request = new DataSpec.Builder().setUri(local.uri).setKey(key).setPosition(0).setLength(length).build();
         return new CacheWriter(source, request, null, null);
     }
 

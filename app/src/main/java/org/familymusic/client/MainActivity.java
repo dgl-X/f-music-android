@@ -509,7 +509,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         addSetting(content, "Когда сохранять", settings.autoSaveMode().equals("immediately") ? "Сразу после лайка" : "После прослушивания", () -> openSetting(this::chooseAutoSaveMode));
         addToggle(content, "Только по Wi‑Fi", "Для автоматических сохранений", settings.autoSaveWifiOnly(), value -> settings.putBoolean("auto_save_wifi_only", value));
         addSetting(content, "Размер кэша", sizeName(settings.cacheBytes()), () -> openSetting(this::chooseCacheSize));
-        addSetting(content, "Предзагрузка", sizeName(settings.prefetchBytes()), () -> openSetting(this::choosePrefetchSize));
+        addSetting(content, "Предзагрузка двух следующих · на трек", sizeName(settings.prefetchBytes()), () -> openSetting(this::choosePrefetchSize));
         addSetting(content, "Скачать «Мне нравится»", likedDownloadSummary(), () -> openSetting(this::confirmDownloadLiked));
         addSetting(content, "Загрузки и офлайн", downloadsInProgress.size() + " активных · " + offline.all().size() + " сохранено", () -> openSetting(this::showDownloadManager));
         addSetting(content, "Хранилище и очистка", humanBytes(PlaybackCache.get(this).sizeBytes() + offline.sizeBytes()), () -> openSetting(this::showStorageSettings));
@@ -599,8 +599,8 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
     }
 
     private void choosePrefetchSize() {
-        String[] names = {"Выключена", "1 МБ", "3 МБ", "5 МБ"}; long mb = 1024L * 1024L;
-        long[] sizes = {0, mb, 3 * mb, 5 * mb};
+        String[] names = {"Выключена", "1 МБ", "3 МБ", "5 МБ", "8 МБ"}; long mb = 1024L * 1024L;
+        long[] sizes = {0, mb, 3 * mb, 5 * mb, 8 * mb};
         int selected = 0; for (int i = 0; i < sizes.length; i++) if (sizes[i] == settings.prefetchBytes()) selected = i;
         showChoiceScreen("Предзагрузка", names, selected, i -> { settings.putLong("prefetch_bytes", sizes[i]); showSettings(); });
     }
