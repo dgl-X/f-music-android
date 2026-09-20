@@ -21,15 +21,7 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-          cache: gradle
       - name: Разрешить запуск Gradle Wrapper
         run: chmod +x gradlew
       - name: Запустить тесты и собрать debug APK
         run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
-      - name: Сохранить APK проверки
-        uses: actions/upload-artifact@v6
-        with:
-          name: family-music-debug-${{ github.sha }}
-          path: app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-          retention-days: 7
