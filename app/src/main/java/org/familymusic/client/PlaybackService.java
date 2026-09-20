@@ -113,13 +113,17 @@ public final class PlaybackService extends MediaSessionService {
                 }
             }
             @Override public void onPlayerError(androidx.media3.common.PlaybackException error) {
-                DiagnosticLog.add(PlaybackService.this, "player error code=" + error.errorCode + " message=" + error.getMessage());
+                DiagnosticLog.add(PlaybackService.this, "player error code=" + error.errorCode + " message=" + error.getMessage() + " cause=" + errorCause(error));
                 cancelPrefetch();
                 MediaItem current = player.getCurrentMediaItem();
                 String mediaId = current == null ? "" : current.mediaId;
                 PlaybackRetryGuard.Decision decision = retryGuard.onError(mediaId);
                 retryHandler.removeCallbacksAndMessages(null);
                 if (current != null && decision.retry) {
+                    if (decision.attempt == 1) {
+                        PlaybackCache.get(PlaybackService.this).remove(current);
+                        DiagnosticLog.add(PlaybackService.this, "discard playback cache after source error track=" + mediaId);
+                    }
                     int attempt = decision.attempt;
                     int index = player.getCurrentMediaItemIndex();
                     long position = Math.max(0, player.getCurrentPosition());
@@ -163,6 +167,17 @@ public final class PlaybackService extends MediaSessionService {
             case Player.DISCONTINUITY_REASON_INTERNAL -> "internal";
             default -> String.valueOf(reason);
         };
+    }
+
+    private static String errorCause(Throwable error) {
+        StringBuilder result = new StringBuilder();
+        Throwable current = error;
+        for (int depth = 0; current != null && depth < 4; depth++, current = current.getCause()) {
+            if (depth > 0) result.append(" <- ");
+            result.append(current.getClass().getSimpleName());
+            if (current.getMessage() != null && !current.getMessage().isBlank()) result.append(':').append(current.getMessage());
+        }
+        return result.toString();
     }
 
     private void registerNetworkLogging() {

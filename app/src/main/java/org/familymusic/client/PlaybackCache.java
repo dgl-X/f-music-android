@@ -81,6 +81,13 @@ final class PlaybackCache {
 
     long sizeBytes() { return cache.getCacheSpace(); }
 
+    void remove(MediaItem item) {
+        MediaItem.LocalConfiguration local = item == null ? null : item.localConfiguration;
+        String key = local == null ? null : local.customCacheKey;
+        if (key == null || !key.startsWith(CACHE_PREFIX)) return;
+        try { cache.removeResource(key); } catch (Exception ignored) {}
+    }
+
     synchronized void clear() {
         for (String key : new java.util.HashSet<>(cache.getKeys())) {
             try { cache.removeResource(key); } catch (Exception ignored) {}
