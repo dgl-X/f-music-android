@@ -21,7 +21,6 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-          cache: gradle
 
       - name: Проверить версию тега
         env:
