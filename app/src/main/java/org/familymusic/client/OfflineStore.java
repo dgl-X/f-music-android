@@ -21,6 +21,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 final class OfflineStore {
     interface Callback { void done(); void failure(String message); default void progress(int percent) {} }
+    interface TracksCallback { void done(List<Track> tracks); }
 
     private final File directory;
     private final Context context;
@@ -35,7 +36,11 @@ final class OfflineStore {
         preferences = context.getSharedPreferences("offline_music", Context.MODE_PRIVATE);
     }
 
-    boolean hasTracks() { return !all().isEmpty(); }
+    boolean hasTracks() {
+        String saved = preferences.getString("tracks", "{}");
+        return saved != null && saved.length() > 2;
+    }
+    void listAsync(TracksCallback callback) { executor.execute(() -> callback.done(all())); }
     long sizeBytes() { return directorySize(directory); }
     synchronized void clearAll() { for (Track track : all()) remove(track.id); }
     boolean contains(String trackId) { return file(trackId).isFile() && metadata().has(trackId); }

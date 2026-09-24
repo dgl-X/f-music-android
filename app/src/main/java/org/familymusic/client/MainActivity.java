@@ -200,7 +200,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
             if (offline.hasTracks()) {
                 downloadedOnly = true; likedOnly = false; showLibrary();
                 api.get("/me", new UiCallback() {
-                    @Override void ok(JSONObject json) { downloadedOnly = false; likedOnly = true; showLibrary(); }
+                    @Override void ok(JSONObject json) { downloadedOnly = false; likedOnly = true; updateTabs(); loadTracks(); }
                     @Override void fail(String message) { /* Offline library is already usable. */ }
                 });
             }
@@ -801,15 +801,20 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         trackLoadGeneration++;
         trackOffset = 0; trackTotal = 0; trackHasMore = false; trackLoading = false;
         if (downloadedOnly) {
-            List<Track> tracks = new ArrayList<>();
-            String query = searchQuery.toLowerCase(java.util.Locale.getDefault());
-            for (Track track : offline.all()) {
-                String searchable = (track.title + " " + track.artist + " " + track.album).toLowerCase(java.util.Locale.getDefault());
-                if (query.isEmpty() || searchable.contains(query)) tracks.add(track);
-            }
-            adapter.setTracks(tracks);
-            trackTotal = tracks.size();
-            status.setText(tracks.isEmpty() ? (query.isEmpty() ? "Скачанных треков пока нет" : "Ничего не найдено") : tracks.size() + " скачано");
+            final int generation = trackLoadGeneration;
+            final String query = searchQuery.toLowerCase(java.util.Locale.getDefault());
+            status.setText("Читаем скачанную музыку…");
+            offline.listAsync(savedTracks -> runOnUiThread(() -> {
+                if (generation != trackLoadGeneration || !downloadedOnly) return;
+                List<Track> tracks = new ArrayList<>();
+                for (Track track : savedTracks) {
+                    String searchable = (track.title + " " + track.artist + " " + track.album).toLowerCase(java.util.Locale.getDefault());
+                    if (query.isEmpty() || searchable.contains(query)) tracks.add(track);
+                }
+                adapter.setTracks(tracks);
+                trackTotal = tracks.size();
+                status.setText(tracks.isEmpty() ? (query.isEmpty() ? "Скачанных треков пока нет" : "Ничего не найдено") : tracks.size() + " скачано");
+            }));
             return;
         }
         if (historyMode) {
