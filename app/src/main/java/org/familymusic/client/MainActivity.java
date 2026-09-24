@@ -128,6 +128,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
     private boolean trackHasMore;
     private boolean trackLoading;
     private int trackLoadGeneration;
+    private int queueRequestGeneration;
     private final Handler searchHandler = new Handler(Looper.getMainLooper());
     private final Handler progressHandler = new Handler(Looper.getMainLooper());
     private final Handler stateHandler = new Handler(Looper.getMainLooper());
@@ -214,7 +215,11 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
             @Override void ok(JSONObject json) { showLibrary(); }
             @Override void fail(String message) {
                 if (offline.hasTracks()) { downloadedOnly = true; likedOnly = false; showLibrary(); }
-                else { api.clearSession(); showLogin(); }
+                else { showLibrary(); toast("Не удалось проверить сессию — повторим при появлении сети"); }
+            }
+            @Override void failStatus(int status, String message) {
+                if (ApiClient.isAuthenticationFailure(status)) { api.clearSession(); showLogin(); }
+                else fail(message);
             }
         });
     }
@@ -881,19 +886,36 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         if (!selected.streamAvailable) { toast("Сервер с этой песней временно недоступен"); return; }
         final String sourceName = currentQueueSource();
         if (!downloadedOnly && !historyMode) {
+            final int generation = ++queueRequestGeneration;
+            startQueue(new ArrayList<>(adapter.tracks()), position, selected, true, sourceName);
             status.setText("Готовим очередь…");
             api.get(libraryQuery("newest", true, 0, 10000, ""), new UiCallback() {
                 @Override void ok(JSONObject json) {
-                    List<Track> tracks = tracksFrom(json); int selectedPosition = 0;
-                    for (int i = 0; i < tracks.size(); i++) if (tracks.get(i).id.equals(selected.id)) { selectedPosition = i; break; }
-                    startQueue(tracks, selectedPosition, selected, true, sourceName);
+                    if (generation != queueRequestGeneration) return;
+                    List<Track> tracks = tracksFrom(json);
+                    extendCurrentQueue(tracks);
                     status.setText("В очереди " + tracks.size() + " из " + json.optInt("total", tracks.size()));
                 }
-                @Override void fail(String message) { startQueue(new ArrayList<>(adapter.tracks()), position, selected, true, sourceName); toast("Очередь ограничена загруженными треками"); }
+                @Override void fail(String message) { if (generation == queueRequestGeneration) toast("Очередь ограничена загруженными треками"); }
             });
             return;
         }
+        queueRequestGeneration++;
         startQueue(new ArrayList<>(adapter.tracks()), position, selected, true, sourceName);
+    }
+
+    private void extendCurrentQueue(List<Track> tracks) {
+        if (controller == null || tracks.isEmpty()) return;
+        Set<String> present = new HashSet<>();
+        for (int i = 0; i < controller.getMediaItemCount(); i++) present.add(controller.getMediaItemAt(i).mediaId);
+        List<MediaItem> additions = new ArrayList<>();
+        for (Track track : tracks) {
+            if (!track.streamAvailable && !offline.contains(track.id)) continue;
+            playbackTracks.put(track.id, track);
+            if (present.add(track.id)) additions.add(mediaItemFor(track));
+        }
+        if (!additions.isEmpty()) controller.addMediaItems(additions);
+        savePlaybackState();
     }
 
     private List<Track> tracksFrom(JSONObject json) {
@@ -1769,8 +1791,10 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
     abstract class UiCallback implements ApiClient.Callback {
         abstract void ok(JSONObject json);
         abstract void fail(String message);
+        void failStatus(int status, String message) { fail(message); }
         @Override public final void success(JSONObject json) { runOnUiThread(() -> ok(json)); }
         @Override public final void failure(String message) { runOnUiThread(() -> fail(message)); }
+        @Override public final void failure(int status, String message) { runOnUiThread(() -> failStatus(status, message)); }
     }
 
     private LinearLayout column() { LinearLayout view = new LinearLayout(this); view.setOrientation(LinearLayout.VERTICAL); view.setBackgroundColor(Color.rgb(14, 16, 20)); return view; }

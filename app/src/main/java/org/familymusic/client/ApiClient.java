@@ -27,6 +27,7 @@ final class ApiClient {
     interface Callback {
         void success(JSONObject json);
         void failure(String message);
+        default void failure(int status, String message) { failure(message); }
     }
 
     ApiClient(Context context) {
@@ -77,6 +78,7 @@ final class ApiClient {
     boolean hasSession() { return !preferences.getString("cookie", "").isEmpty(); }
     String cookie() { return preferences.getString("cookie", ""); }
     void clearSession() { preferences.edit().remove("cookie").apply(); }
+    static boolean isAuthenticationFailure(int status) { return status == 401; }
 
     void get(String path, Callback callback) { request("GET", path, null, callback); }
     void post(String path, JSONObject body, Callback callback) { request("POST", path, body, callback); }
@@ -133,7 +135,7 @@ final class ApiClient {
                 String text = read(stream);
                 JSONObject json = text.isEmpty() ? new JSONObject() : new JSONObject(text);
                 if (status >= 200 && status < 300) callback.success(json);
-                else callback.failure(json.optString("error", "Ошибка сервера: " + status));
+                else callback.failure(status, json.optString("error", "Ошибка сервера: " + status));
             } catch (Exception error) {
                 callback.failure(error.getMessage() == null ? "Ошибка соединения" : error.getMessage());
             } finally {
