@@ -86,6 +86,8 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
     private TextView nowPlaying;
     private TextView nowPlayingArtist;
     private TextView pageTitle;
+    private TextView collectionMeta;
+    private View collectionHero;
     private TextView selectionTitle;
     private Button sectionBack;
     private Button selectButton;
@@ -297,24 +299,18 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         LinearLayout screen = column();
         LinearLayout header = new LinearLayout(this);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setPadding(dp(12), dp(8), dp(8), dp(8));
+        header.setPadding(dp(16), dp(10), dp(10), dp(4));
         sectionBack = smallButton("‹"); sectionBack.setTextSize(26); sectionBack.setVisibility(View.GONE);
         header.addView(sectionBack, new LinearLayout.LayoutParams(dp(44), dp(46)));
-        pageTitle = label("Мне нравится", 20, Color.WHITE);
+        pageTitle = label("Мне нравится", 26, Color.WHITE);
         pageTitle.setTypeface(null, android.graphics.Typeface.BOLD);
         pageTitle.setSingleLine(true);
         pageTitle.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        header.addView(pageTitle, new LinearLayout.LayoutParams(0, dp(52), 1));
-        Button explore = smallButton("♫");explore.setTextSize(20);explore.setContentDescription("Для вас, исполнители и альбомы");header.addView(explore,margin(dp(48),dp(46),6,0,0,0));
-        selectButton = smallButton("☑");
-        selectButton.setTextSize(18);
-        header.addView(selectButton, margin(dp(48), dp(46), 6, 0, 0, 0));
-        Button upload = smallButton("＋");
-        upload.setTextSize(20);
-        header.addView(upload, margin(dp(48), dp(46), 6, 0, 0, 0));
-        Button settingsButton = smallButton("⚙");
-        settingsButton.setTextSize(20);
-        header.addView(settingsButton, margin(dp(48), dp(46), 6, 0, 0, 0));
+        header.addView(pageTitle, new LinearLayout.LayoutParams(0, dp(54), 1));
+        Button explore = headerButton("♫", "Для вас, исполнители и альбомы"); header.addView(explore, new LinearLayout.LayoutParams(dp(44), dp(48)));
+        selectButton = headerButton("✓", "Выбрать несколько треков");
+        Button upload = headerButton("＋", "Загрузить музыку"); header.addView(upload, new LinearLayout.LayoutParams(dp(44), dp(48)));
+        Button settingsButton = headerButton("⋯", "Настройки"); header.addView(settingsButton, new LinearLayout.LayoutParams(dp(44), dp(48)));
         LinearLayout tabs = new LinearLayout(this);
         tabs.setPadding(dp(5), dp(3), dp(5), dp(3)); tabs.setBackgroundColor(Color.rgb(20, 23, 29));
         likedButton = navItem(R.drawable.ic_player_heart_filled, "Нравится");
@@ -330,6 +326,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         EditText search = input("Поиск по трекам, артистам и альбомам", false);
         search.setSingleLine(true);
         search.setTextSize(14);
+        collectionHero = likedCollectionHero();
         status = label("Загрузка…", 14, Color.rgb(167, 171, 182));
         status.setPadding(dp(16), dp(4), dp(16), dp(8));
         selectionBar = new LinearLayout(this);
@@ -358,12 +355,13 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
             }
         });
         screen.addView(header);
-        screen.addView(search, margin(-1, dp(46), 12, 0, 12, 6));
+        screen.addView(collectionHero, margin(-1, dp(148), 12, 4, 12, 10));
+        screen.addView(search, margin(-1, dp(44), 12, 0, 12, 5));
         screen.addView(status);
         screen.addView(selectionBar, margin(-1, dp(56), 10, 0, 10, 5));
         screen.addView(list, new LinearLayout.LayoutParams(-1, 0, 1));
-        screen.addView(playerBar(), new LinearLayout.LayoutParams(-1, dp(80)));
-        screen.addView(tabs, new LinearLayout.LayoutParams(-1, dp(64)));
+        screen.addView(playerBar(), margin(-1, dp(76), 8, 0, 8, 6));
+        screen.addView(tabs, new LinearLayout.LayoutParams(-1, dp(62)));
         setContentView(screen);
         applySystemInsets(screen);
         settingsButton.setOnClickListener(view -> showSettings());
@@ -451,14 +449,15 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
     private View playerBar() {
         LinearLayout bar = new LinearLayout(this);
         bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setPadding(dp(12), dp(8), dp(12), dp(8));
-        bar.setBackgroundColor(Color.rgb(25, 28, 35));
+        bar.setPadding(dp(10), dp(7), dp(8), dp(7));
+        bar.setBackground(round(Color.rgb(31, 34, 42), 18));
+        bar.setElevation(dp(8));
         nowCover = new ImageView(this);
         nowCover.setScaleType(ImageView.ScaleType.CENTER_CROP);
         nowCover.setImageResource(R.drawable.ic_music_note);
         nowCover.setBackground(round(Color.rgb(38, 42, 52), 9));
         nowCover.setClipToOutline(true);
-        bar.addView(nowCover, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        bar.addView(nowCover, new LinearLayout.LayoutParams(dp(50), dp(50)));
         LinearLayout nowPlayingText = new LinearLayout(this);
         nowPlayingText.setOrientation(LinearLayout.VERTICAL);
         nowPlayingText.setGravity(Gravity.CENTER_VERTICAL);
@@ -476,14 +475,59 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         ImageButton previous = iconButton(R.drawable.ic_player_previous, "Предыдущий трек", Color.TRANSPARENT);
         playPause = iconButton(R.drawable.ic_player_play, "Воспроизвести", Color.rgb(255, 77, 115));
         ImageButton next = iconButton(R.drawable.ic_player_next, "Следующий трек", Color.TRANSPARENT);
-        bar.addView(previous, new LinearLayout.LayoutParams(dp(42), dp(48)));
-        bar.addView(playPause, margin(dp(52), dp(52), 5, 0, 5, 0));
-        bar.addView(next, new LinearLayout.LayoutParams(dp(42), dp(48)));
+        bar.addView(previous, new LinearLayout.LayoutParams(dp(38), dp(46)));
+        bar.addView(playPause, margin(dp(50), dp(50), 3, 0, 3, 0));
+        bar.addView(next, new LinearLayout.LayoutParams(dp(38), dp(46)));
         previous.setOnClickListener(view -> { if (controller != null) controller.seekToPreviousMediaItem(); });
         playPause.setOnClickListener(view -> togglePlayback());
         next.setOnClickListener(view -> skipToNext());
         bar.setOnClickListener(view -> openFullPlayer());
         return bar;
+    }
+
+    private View likedCollectionHero() {
+        LinearLayout hero = new LinearLayout(this);
+        hero.setOrientation(LinearLayout.VERTICAL);
+        hero.setGravity(Gravity.CENTER_VERTICAL);
+        hero.setPadding(dp(18), dp(14), dp(14), dp(12));
+        GradientDrawable background = new GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                new int[]{Color.rgb(100, 35, 67), Color.rgb(47, 30, 54), Color.rgb(25, 28, 35)});
+        background.setCornerRadius(dp(20));
+        hero.setBackground(background);
+        TextView eyebrow = label("ВАША КОЛЛЕКЦИЯ", 10, Color.rgb(255, 176, 198));
+        eyebrow.setTypeface(null, android.graphics.Typeface.BOLD);
+        TextView title = label("Мне нравится", 22, Color.WHITE);
+        title.setTypeface(null, android.graphics.Typeface.BOLD);
+        collectionMeta = label("Загружаем любимые треки…", 12, Color.rgb(215, 204, 213));
+        LinearLayout actions = new LinearLayout(this);
+        actions.setGravity(Gravity.CENTER_VERTICAL);
+        Button play = button("▶  Слушать");
+        play.setTextSize(13); play.setTypeface(null, android.graphics.Typeface.BOLD);
+        Button shuffle = smallButton("Перемешать");
+        shuffle.setTextSize(13); shuffle.setBackground(round(Color.argb(100, 255, 255, 255), 16));
+        actions.addView(play, new LinearLayout.LayoutParams(0, dp(42), 1));
+        actions.addView(shuffle, margin(dp(124), dp(42), 8, 0, 0, 0));
+        hero.addView(eyebrow, new LinearLayout.LayoutParams(-1, dp(18)));
+        hero.addView(title, new LinearLayout.LayoutParams(-1, dp(31)));
+        hero.addView(collectionMeta, new LinearLayout.LayoutParams(-1, dp(24)));
+        hero.addView(actions, new LinearLayout.LayoutParams(-1, dp(42)));
+        play.setOnClickListener(v -> playCurrentCollection(false));
+        shuffle.setOnClickListener(v -> playCurrentCollection(true));
+        return hero;
+    }
+
+    private void playCurrentCollection(boolean shuffle) {
+        if (controller == null) { toast("Плеер ещё подключается"); return; }
+        api.get(libraryQuery("newest", true, 0, 10000, ""), new UiCallback() {
+            @Override void ok(JSONObject json) {
+                List<Track> tracks = tracksFrom(json);
+                if (tracks.isEmpty()) { toast("В коллекции пока нет треков"); return; }
+                if (shuffle) java.util.Collections.shuffle(tracks);
+                startQueue(tracks, 0, tracks.get(0), true, shuffle ? "Перемешано · Мне нравится" : "Мне нравится");
+            }
+            @Override void fail(String message) { toast(message); }
+        });
     }
 
     private void showSettings() {
@@ -750,6 +794,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         setNavActive(historyButton, historyMode);
         if (pageTitle != null) pageTitle.setText(playlistMode ? activePlaylistTitle : historyMode ? "История" : downloadedOnly ? "Скачано" : likedOnly ? "Мне нравится" : "Все треки");
         if (sectionBack != null) sectionBack.setVisibility(playlistMode ? View.VISIBLE : View.GONE);
+        if (collectionHero != null) collectionHero.setVisibility(!historyMode && !playlistMode && !downloadedOnly && likedOnly ? View.VISIBLE : View.GONE);
     }
 
     private void loadTracks() {
@@ -808,6 +853,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
                 if (first) adapter.setTracks(tracks); else adapter.appendTracks(tracks);
                 trackOffset = requestedOffset + tracks.size(); trackTotal = json.optInt("total", trackOffset); trackHasMore = json.optBoolean("has_more", trackOffset < trackTotal); trackLoading = false;
                 status.setText(trackTotal == 0 ? (!searchQuery.isEmpty() ? "Ничего не найдено" : playlistMode ? "В этом плейлисте пока нет треков" : likedOnly ? "Здесь появятся отмеченные сердечком треки" : "Медиатека пуста") : "Показано " + trackOffset + " из " + trackTotal);
+                if (collectionMeta != null && likedOnly) collectionMeta.setText(trackTotal == 0 ? "Здесь появятся любимые песни" : trackTotal + " " + trackWord(trackTotal));
             }
             @Override void fail(String message) {
                 if (generation != trackLoadGeneration) return; trackLoading = false;
@@ -1416,14 +1462,19 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         playerDialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
         LinearLayout screen = column();
         screen.setPadding(dp(20), dp(8), dp(20), dp(18));
+        GradientDrawable playerBackground = new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{Color.rgb(57, 27, 43), Color.rgb(24, 22, 29), Color.rgb(14, 16, 20)});
+        screen.setBackground(playerBackground);
         LinearLayout top = new LinearLayout(this);
         top.setGravity(Gravity.CENTER_VERTICAL);
-        Button close = smallButton("⌄");
-        TextView caption = label("Сейчас играет", 15, Color.rgb(167, 171, 182));
+        Button close = headerButton("⌄", "Свернуть плеер");
+        TextView caption = label("Сейчас играет", 13, Color.rgb(205, 193, 202));
+        caption.setTypeface(null, android.graphics.Typeface.BOLD);
         caption.setGravity(Gravity.CENTER);
         top.addView(close, new LinearLayout.LayoutParams(dp(48), dp(48)));
         top.addView(caption, new LinearLayout.LayoutParams(0, dp(48), 1));
-        Button queueButton = smallButton("≡");
+        Button queueButton = headerButton("≡", "Открыть очередь");
         queueButton.setTextSize(23);
         queueButton.setContentDescription("Открыть очередь");
         top.addView(queueButton, new LinearLayout.LayoutParams(dp(48), dp(48)));
@@ -1431,24 +1482,25 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         fullCover = new ImageView(this);
         fullCover.setScaleType(ImageView.ScaleType.CENTER_CROP);
         fullCover.setImageResource(R.drawable.ic_music_note);
-        fullCover.setBackground(round(Color.rgb(38, 42, 52), 18));
+        fullCover.setBackground(round(Color.rgb(38, 42, 52), 22));
         fullCover.setClipToOutline(true);
+        fullCover.setElevation(dp(12));
         int coverSize = Math.min(dp(360), getResources().getDisplayMetrics().widthPixels - dp(40));
-        coverSize = Math.min(coverSize, Math.round(getResources().getDisplayMetrics().heightPixels * .36f));
+        coverSize = Math.min(coverSize, Math.round(getResources().getDisplayMetrics().heightPixels * .42f));
         LinearLayout.LayoutParams coverLayout = new LinearLayout.LayoutParams(coverSize, coverSize);
         coverLayout.gravity = Gravity.CENTER_HORIZONTAL;
-        coverLayout.setMargins(0, dp(14), 0, dp(24));
+        coverLayout.setMargins(0, dp(18), 0, dp(28));
         screen.addView(fullCover, coverLayout);
         LinearLayout trackInfo = new LinearLayout(this);
         trackInfo.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout textInfo = new LinearLayout(this);
         textInfo.setOrientation(LinearLayout.VERTICAL);
-        fullTitle = label("", 23, Color.WHITE);
+        fullTitle = label("", 24, Color.WHITE);
         fullTitle.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
         fullTitle.setMaxLines(2);
         fullTitle.setEllipsize(android.text.TextUtils.TruncateAt.END);
         fullTitle.setTypeface(null, android.graphics.Typeface.BOLD);
-        fullArtist = label("", 15, Color.rgb(167, 171, 182));
+        fullArtist = label("", 15, Color.rgb(205, 193, 202));
         fullArtist.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
         fullArtist.setSingleLine(true);
         fullArtist.setEllipsize(android.text.TextUtils.TruncateAt.END);
@@ -1462,7 +1514,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         screen.addView(trackInfo, margin(-1, -2, 2, 0, 2, 12));
         fullSeek = new SeekBar(this);
         screen.addView(fullSeek, new LinearLayout.LayoutParams(-1, dp(44)));
-        fullTime = label("0:00                                      0:00", 12, Color.rgb(167, 171, 182));
+        fullTime = label("0:00                                      0:00", 12, Color.rgb(190, 181, 190));
         fullTime.setGravity(Gravity.CENTER_VERTICAL);
         screen.addView(fullTime, new LinearLayout.LayoutParams(-1, dp(30)));
         LinearLayout controls = new LinearLayout(this);
@@ -1473,9 +1525,9 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         ImageButton next = iconButton(R.drawable.ic_player_next, "Следующий трек", Color.TRANSPARENT);
         fullRepeat = iconButton(R.drawable.ic_player_repeat, "Режим повтора", Color.TRANSPARENT);
         controls.addView(fullShuffle, new LinearLayout.LayoutParams(0, dp(58), 1));
-        controls.addView(previous, margin(dp(58), dp(64), 5, 0, 5, 0));
-        controls.addView(fullPlayPause, margin(dp(72), dp(72), 6, 0, 6, 0));
-        controls.addView(next, margin(dp(58), dp(64), 5, 0, 5, 0));
+        controls.addView(previous, margin(dp(60), dp(66), 5, 0, 5, 0));
+        controls.addView(fullPlayPause, margin(dp(76), dp(76), 7, 0, 7, 0));
+        controls.addView(next, margin(dp(60), dp(66), 5, 0, 5, 0));
         controls.addView(fullRepeat, new LinearLayout.LayoutParams(0, dp(58), 1));
         screen.addView(controls, margin(-1, dp(80), 0, 8, 0, 0));
         close.setOnClickListener(view -> playerDialog.dismiss());
@@ -1710,6 +1762,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
     private EditText input(String hint, boolean password) { EditText view = new EditText(this); view.setHint(hint); view.setTextColor(Color.WHITE); view.setHintTextColor(Color.rgb(130, 134, 145)); view.setSingleLine(true); view.setBackground(round(Color.rgb(25, 28, 35), 10)); view.setPadding(dp(14), 0, dp(14), 0); if (password) view.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD); return view; }
     private Button button(String text) { Button view = new Button(this); view.setText(text); view.setTextColor(Color.WHITE); view.setAllCaps(false); view.setBackground(round(Color.rgb(255, 77, 115), 12)); return view; }
     private Button smallButton(String text) { Button view = new Button(this); view.setText(text); view.setTextColor(Color.WHITE); view.setTextSize(12); view.setAllCaps(false); view.setMinWidth(0); view.setMinimumWidth(0); view.setPadding(dp(10), 0, dp(10), 0); view.setBackground(round(Color.rgb(41, 45, 56), 10)); return view; }
+    private Button headerButton(String text, String description) { Button view = smallButton(text); view.setTextSize(21); view.setContentDescription(description); view.setPadding(0, 0, 0, 0); view.setBackground(round(Color.TRANSPARENT, 22)); return view; }
     private Button menuRow(String text) { Button view = smallButton(text); view.setGravity(Gravity.START | Gravity.CENTER_VERTICAL); view.setTextSize(15); view.setPadding(dp(18), 0, dp(14), 0); view.setBackground(round(Color.rgb(25, 28, 35), 14)); return view; }
     private View navItem(int drawable, String text) {
         LinearLayout item = new LinearLayout(this); item.setOrientation(LinearLayout.VERTICAL); item.setGravity(Gravity.CENTER); item.setBackground(round(Color.TRANSPARENT, 14));
@@ -1760,6 +1813,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
     }
     private GradientDrawable round(int color, int radiusDp) { GradientDrawable value = new GradientDrawable(); value.setColor(color); value.setCornerRadius(dp(radiusDp)); return value; }
     private void toast(String value) { Toast.makeText(this, value, Toast.LENGTH_LONG).show(); }
+    private String trackWord(int count) { int mod100 = count % 100, mod10 = count % 10; return mod100 >= 11 && mod100 <= 14 ? "треков" : mod10 == 1 ? "трек" : mod10 >= 2 && mod10 <= 4 ? "трека" : "треков"; }
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
     private LinearLayout.LayoutParams margin(int width, int height, int left, int top, int right, int bottom) { return margin(width, height, left, top, right, bottom, 0); }
     private LinearLayout.LayoutParams margin(int width, int height, int left, int top, int right, int bottom, float weight) { LinearLayout.LayoutParams value = new LinearLayout.LayoutParams(width, height, weight); value.setMargins(dp(left), dp(top), dp(right), dp(bottom)); return value; }

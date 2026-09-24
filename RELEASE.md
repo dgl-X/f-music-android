@@ -55,9 +55,9 @@ sha256sum app/build/outputs/apk/release/app-release.apk
 `versionName` выпуск создаётся аннотированным тегом той же версии:
 
 ```bash
-git tag -a v1.0.26 -m "Family Music Android v1.0.26"
-git push origin v1.0.26
+git tag -a v1.0.27 -m "Family Music Android v1.0.27"
+git push origin v1.0.27
 ```
 
 Workflow проверит совпадение тега с `versionName`, запустит тесты, проверит
-подпись и приложит к GitHub Release APK `f_music_v1.0.26.apk` и `SHA256SUMS`.
+подпись и приложит к GitHub Release APK `f_music_v1.0.27.apk` и `SHA256SUMS`.

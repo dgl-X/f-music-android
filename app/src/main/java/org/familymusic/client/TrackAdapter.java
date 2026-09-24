@@ -62,17 +62,17 @@ final class TrackAdapter extends RecyclerView.Adapter<TrackAdapter.Holder> {
         row.setLayoutParams(new RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(parent, 14), dp(parent, 8), dp(parent, 6), dp(parent, 8));
+        row.setPadding(dp(parent, 12), dp(parent, 6), dp(parent, 4), dp(parent, 6));
         ImageView cover = new ImageView(parent.getContext());
         cover.setScaleType(ImageView.ScaleType.CENTER_CROP);
         GradientDrawable coverBackground = new GradientDrawable();
-        coverBackground.setColor(Color.rgb(38, 42, 52)); coverBackground.setCornerRadius(dp(parent, 9));
+        coverBackground.setColor(Color.rgb(38, 42, 52)); coverBackground.setCornerRadius(dp(parent, 12));
         cover.setBackground(coverBackground); cover.setClipToOutline(true);
-        row.addView(cover, new LinearLayout.LayoutParams(dp(parent, 52), dp(parent, 52)));
+        row.addView(cover, new LinearLayout.LayoutParams(dp(parent, 54), dp(parent, 54)));
         LinearLayout labels = new LinearLayout(parent.getContext());
         labels.setOrientation(LinearLayout.VERTICAL);
-        labels.setPadding(dp(parent, 12), 0, dp(parent, 8), 0);
-        TextView title = text(parent, "", 15, Color.rgb(247, 247, 250));
+        labels.setPadding(dp(parent, 12), 0, dp(parent, 4), 0);
+        TextView title = text(parent, "", 16, Color.rgb(247, 247, 250));
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         title.setSingleLine(true);
         title.setEllipsize(TextUtils.TruncateAt.END);
@@ -85,15 +85,17 @@ final class TrackAdapter extends RecyclerView.Adapter<TrackAdapter.Holder> {
         LinearLayout actions = new LinearLayout(parent.getContext());
         actions.setOrientation(LinearLayout.HORIZONTAL);
         actions.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
-        TextView download = text(parent, "⇩", 22, Color.rgb(167, 171, 182));
+        TextView download = text(parent, "↓", 20, Color.rgb(167, 171, 182));
         download.setGravity(Gravity.CENTER);
-        actions.addView(download, new LinearLayout.LayoutParams(dp(parent, 42), dp(parent, 54)));
+        download.setContentDescription("Скачать трек");
+        actions.addView(download, new LinearLayout.LayoutParams(dp(parent, 36), dp(parent, 54)));
         TextView like = text(parent, "♡", 25, Color.rgb(255, 77, 115));
         like.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams likeLayout = new LinearLayout.LayoutParams(dp(parent, 48), dp(parent, 54));
+        like.setContentDescription("Добавить в Мне нравится");
+        LinearLayout.LayoutParams likeLayout = new LinearLayout.LayoutParams(dp(parent, 44), dp(parent, 54));
         actions.addView(like, likeLayout);
-        TextView more = text(parent, "⋮", 23, Color.rgb(167, 171, 182)); more.setGravity(Gravity.CENTER); actions.addView(more, new LinearLayout.LayoutParams(dp(parent, 38), dp(parent, 54)));
-        row.addView(actions, new LinearLayout.LayoutParams(dp(parent, 128), dp(parent, 54)));
+        TextView more = text(parent, "⋮", 23, Color.rgb(145, 149, 160)); more.setGravity(Gravity.CENTER); more.setContentDescription("Действия с треком"); actions.addView(more, new LinearLayout.LayoutParams(dp(parent, 36), dp(parent, 54)));
+        row.addView(actions, new LinearLayout.LayoutParams(dp(parent, 116), dp(parent, 54)));
         return new Holder(row, cover, title, artist, download, like, more);
     }
 
@@ -106,7 +108,8 @@ final class TrackAdapter extends RecyclerView.Adapter<TrackAdapter.Holder> {
         if (!track.streamAvailable) details += " · недоступна";
         holder.artist.setText(details);
         holder.like.setText(track.liked ? "♥" : "♡");
-        holder.download.setText(downloading.contains(track.id) ? "…" : offline.contains(track.id) ? "✓" : "⇩");
+        holder.like.setContentDescription(track.liked ? "Убрать из Мне нравится" : "Добавить в Мне нравится");
+        holder.download.setText(downloading.contains(track.id) ? "…" : offline.contains(track.id) ? "✓" : "↓");
         String localCover = offline.cover(track.id);
         images.load(localCover.isEmpty() ? track.coverUrl : localCover, holder.cover);
         holder.itemView.setBackgroundColor(selected.contains(track.id) ? Color.rgb(72, 38, 54) : Color.TRANSPARENT);
