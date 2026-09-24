@@ -128,7 +128,6 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
     private boolean trackHasMore;
     private boolean trackLoading;
     private int trackLoadGeneration;
-    private int queueRequestGeneration;
     private final Handler searchHandler = new Handler(Looper.getMainLooper());
     private final Handler progressHandler = new Handler(Looper.getMainLooper());
     private final Handler stateHandler = new Handler(Looper.getMainLooper());
@@ -885,37 +884,25 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         if (controller == null) { toast("Плеер ещё подключается"); return; }
         if (!selected.streamAvailable) { toast("Сервер с этой песней временно недоступен"); return; }
         final String sourceName = currentQueueSource();
-        if (!downloadedOnly && !historyMode) {
-            final int generation = ++queueRequestGeneration;
-            startQueue(new ArrayList<>(adapter.tracks()), position, selected, true, sourceName);
-            status.setText("Готовим очередь…");
-            api.get(libraryQuery("newest", true, 0, 10000, ""), new UiCallback() {
-                @Override void ok(JSONObject json) {
-                    if (generation != queueRequestGeneration) return;
-                    List<Track> tracks = tracksFrom(json);
-                    extendCurrentQueue(tracks);
-                    status.setText("В очереди " + tracks.size() + " из " + json.optInt("total", tracks.size()));
-                }
-                @Override void fail(String message) { if (generation == queueRequestGeneration) toast("Очередь ограничена загруженными треками"); }
-            });
-            return;
-        }
-        queueRequestGeneration++;
+        if (playFromCurrentQueue(selected, sourceName)) return;
         startQueue(new ArrayList<>(adapter.tracks()), position, selected, true, sourceName);
     }
 
-    private void extendCurrentQueue(List<Track> tracks) {
-        if (controller == null || tracks.isEmpty()) return;
-        Set<String> present = new HashSet<>();
-        for (int i = 0; i < controller.getMediaItemCount(); i++) present.add(controller.getMediaItemAt(i).mediaId);
-        List<MediaItem> additions = new ArrayList<>();
-        for (Track track : tracks) {
-            if (!track.streamAvailable && !offline.contains(track.id)) continue;
-            playbackTracks.put(track.id, track);
-            if (present.add(track.id)) additions.add(mediaItemFor(track));
+    private boolean playFromCurrentQueue(Track selected, String sourceName) {
+        if (controller == null) return false;
+        for (int index = 0; index < controller.getMediaItemCount(); index++) {
+            if (!selected.id.equals(controller.getMediaItemAt(index).mediaId)) continue;
+            queueSource = sourceName;
+            playbackTracks.put(selected.id, selected);
+            lastPlayingId = selected.id;
+            controller.seekToDefaultPosition(index);
+            controller.play();
+            recordHistory(selected.id);
+            savePlaybackState();
+            updatePlayer();
+            return true;
         }
-        if (!additions.isEmpty()) controller.addMediaItems(additions);
-        savePlaybackState();
+        return false;
     }
 
     private List<Track> tracksFrom(JSONObject json) {
