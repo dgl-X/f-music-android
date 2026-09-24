@@ -902,6 +902,21 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
             updatePlayer();
             return true;
         }
+        if (controller.getMediaItemCount() > 0 && sourceName.equals(queueSource)) {
+            int current = controller.getCurrentMediaItemIndex();
+            int insertion = current == androidx.media3.common.C.INDEX_UNSET
+                    ? controller.getMediaItemCount()
+                    : Math.min(controller.getMediaItemCount(), current + 1);
+            playbackTracks.put(selected.id, selected);
+            lastPlayingId = selected.id;
+            controller.addMediaItem(insertion, mediaItemFor(selected));
+            controller.seekToDefaultPosition(insertion);
+            controller.play();
+            recordHistory(selected.id);
+            savePlaybackState();
+            updatePlayer();
+            return true;
+        }
         return false;
     }
 
