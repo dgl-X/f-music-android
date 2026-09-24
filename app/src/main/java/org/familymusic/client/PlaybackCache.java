@@ -2,6 +2,9 @@ package org.familymusic.client;
 
 import android.content.Context;
 import android.net.Uri;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
 
 import androidx.media3.common.C;
 import androidx.media3.common.MediaItem;
@@ -21,10 +24,17 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.Collections;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 @UnstableApi
 final class PlaybackCache {
     private static final String CACHE_PREFIX = "stream-v3:";
+    private static final ExecutorService WARMUP = Executors.newSingleThreadExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "playback-cache-warmup");
+        thread.setDaemon(true);
+        return thread;
+    });
     private static PlaybackCache instance;
     private final SimpleCache cache;
     private final Context context;
@@ -32,6 +42,17 @@ final class PlaybackCache {
     static synchronized PlaybackCache get(Context context) {
         if (instance == null) instance = new PlaybackCache(context.getApplicationContext());
         return instance;
+    }
+
+    static void warm(Context context, Runnable ready) {
+        Context application = context.getApplicationContext();
+        WARMUP.execute(() -> {
+            long started = SystemClock.elapsedRealtime();
+            get(application);
+            long elapsed = SystemClock.elapsedRealtime() - started;
+            DiagnosticLog.add(application, "startup playback cache ready in " + elapsed + " ms");
+            new Handler(Looper.getMainLooper()).post(ready);
+        });
     }
 
     private PlaybackCache(Context context) {

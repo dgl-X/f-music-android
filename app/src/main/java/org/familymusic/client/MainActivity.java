@@ -158,6 +158,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
     };
     private ListenableFuture<MediaController> controllerFuture;
     private MediaController controller;
+    private int controllerConnectGeneration;
     private ActivityResultLauncher<String[]> audioPicker;
     private ActivityResultLauncher<String> coverPicker;
     private Track pendingCoverTrack;
@@ -389,7 +390,12 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
             }
             @Override public void afterTextChanged(Editable value) {}
         });
-        updateTabs(); connectController(); loadTracks();
+        updateTabs();
+        loadTracks();
+        int generation = controllerConnectGeneration;
+        PlaybackCache.warm(this, () -> {
+            if (generation == controllerConnectGeneration && !isFinishing() && !isDestroyed()) connectController();
+        });
     }
 
     private void showRecommendations() {
@@ -1348,10 +1354,14 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
     private void connectController() {
         stateRestored = false;
         SessionToken token = new SessionToken(this, new ComponentName(this, PlaybackService.class));
-        controllerFuture = new MediaController.Builder(this, token).buildAsync();
-        controllerFuture.addListener(() -> {
+        ListenableFuture<MediaController> future = new MediaController.Builder(this, token).buildAsync();
+        controllerFuture = future;
+        long started = android.os.SystemClock.elapsedRealtime();
+        future.addListener(() -> {
             try {
-                controller = controllerFuture.get();
+                if (controllerFuture != future) { MediaController.releaseFuture(future); return; }
+                controller = future.get();
+                DiagnosticLog.add(this, "startup media controller ready in " + (android.os.SystemClock.elapsedRealtime() - started) + " ms");
                 controller.addListener(new Player.Listener() {
                     @Override public void onIsPlayingChanged(boolean playing) { updatePlayer(); }
                     @Override public void onMediaItemTransition(@Nullable MediaItem mediaItem, int reason) {
@@ -1733,6 +1743,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
     }
 
     private void disconnectController() {
+        controllerConnectGeneration++;
         savePlaybackState();
         stateHandler.removeCallbacksAndMessages(null);
         controller = null;
