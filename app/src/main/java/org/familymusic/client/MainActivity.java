@@ -113,6 +113,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
     private ImageButton fullRepeat;
     private ImageButton fullLike;
     private SeekBar fullSeek;
+    private final PlayerSeekGuard fullSeekGuard = new PlayerSeekGuard();
     private boolean likedOnly = true;
     private boolean downloadedOnly = false;
     private boolean playlistMode = false;
@@ -128,6 +129,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
     private boolean trackHasMore;
     private boolean trackLoading;
     private int trackLoadGeneration;
+    private int queueBuildGeneration;
     private final Handler searchHandler = new Handler(Looper.getMainLooper());
     private final Handler progressHandler = new Handler(Looper.getMainLooper());
     private final Handler stateHandler = new Handler(Looper.getMainLooper());
@@ -147,11 +149,13 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
                 long position = Math.max(0, controller.getCurrentPosition());
                 long buffered = Math.max(position, controller.getBufferedPosition());
                 if (duration > 0) buffered = Math.min(duration, buffered);
-                fullSeek.setMax((int) Math.min(Integer.MAX_VALUE, duration));
-                fullSeek.setProgress((int) Math.min(Integer.MAX_VALUE, position));
                 fullSeek.setSecondaryProgress((int) Math.min(Integer.MAX_VALUE, buffered));
-                fullSeek.setEnabled(duration > 0);
-                fullTime.setText(formatTime(position) + "   ·   " + (duration > 0 ? formatTime(duration) : "—:—"));
+                if (fullSeekGuard.allowsPeriodicUpdate()) {
+                    fullSeek.setMax((int) Math.min(Integer.MAX_VALUE, duration));
+                    fullSeek.setProgress((int) Math.min(Integer.MAX_VALUE, position));
+                    fullSeek.setEnabled(duration > 0);
+                    fullTime.setText(formatTime(position) + "   ·   " + (duration > 0 ? formatTime(duration) : "—:—"));
+                }
                 progressHandler.postDelayed(this, 500);
             }
         }
@@ -450,7 +454,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
             List<Track> tracks=tracksFrom(json);Dialog dialog=new Dialog(MainActivity.this);dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);LinearLayout screen=column();screen.setPadding(dp(14),dp(8),dp(14),dp(18));LinearLayout top=new LinearLayout(MainActivity.this);top.setGravity(Gravity.CENTER_VERTICAL);Button close=smallButton("‹");close.setTextSize(28);TextView heading=label(album.isEmpty()?artist:album,21,Color.WHITE);heading.setTypeface(null,android.graphics.Typeface.BOLD);heading.setGravity(Gravity.CENTER);top.addView(close,new LinearLayout.LayoutParams(dp(52),dp(52)));top.addView(heading,new LinearLayout.LayoutParams(0,dp(52),1));top.addView(new View(MainActivity.this),new LinearLayout.LayoutParams(dp(52),dp(52)));screen.addView(top);
             LinearLayout hero=new LinearLayout(MainActivity.this);hero.setGravity(Gravity.CENTER_VERTICAL);ImageView art=new ImageView(MainActivity.this);art.setScaleType(ImageView.ScaleType.CENTER_CROP);art.setImageResource(R.drawable.ic_music_note);art.setBackground(round(Color.rgb(38,42,52),14));art.setClipToOutline(true);for(Track track:tracks)if(!track.coverUrl.isEmpty()){images.load(track.coverUrl,art);break;}LinearLayout info=column();TextView title=label(album.isEmpty()?artist:album,22,Color.WHITE);title.setTypeface(null,android.graphics.Typeface.BOLD);long seconds=0;for(Track track:tracks)seconds+=(long)track.durationSeconds;final long totalSeconds=seconds;TextView meta=label((album.isEmpty()?"Исполнитель":artist)+" · "+tracks.size()+" треков · "+Math.max(1,totalSeconds/60)+" мин.",13,Color.rgb(167,171,182));LinearLayout actions=new LinearLayout(MainActivity.this);Button play=button("▶ Слушать"),shuffle=smallButton("Перемешать");actions.addView(play,new LinearLayout.LayoutParams(0,dp(46),1));actions.addView(shuffle,margin(dp(125),dp(46),8,0,0,0));info.addView(title);info.addView(meta,margin(-1,-2,0,5,0,8));info.addView(actions);hero.addView(art,new LinearLayout.LayoutParams(dp(112),dp(112)));LinearLayout.LayoutParams infoParams=new LinearLayout.LayoutParams(0,-2,1);infoParams.setMargins(dp(14),0,0,0);hero.addView(info,infoParams);screen.addView(hero,margin(-1,-2,0,8,0,12));
             ScrollView scroll=new ScrollView(MainActivity.this);LinearLayout list=column();scroll.addView(list);for(int i=0;i<tracks.size();i++){int position=i;Track track=tracks.get(i);LinearLayout row=new LinearLayout(MainActivity.this);row.setGravity(Gravity.CENTER_VERTICAL);TextView number=label(String.valueOf(i+1),13,Color.rgb(140,144,155));number.setGravity(Gravity.CENTER);LinearLayout names=column();TextView trackTitle=label(track.title,15,Color.WHITE);trackTitle.setSingleLine(true);trackTitle.setEllipsize(android.text.TextUtils.TruncateAt.END);TextView detail=label(track.artist+(track.year==null?"":" · "+track.year),12,Color.rgb(167,171,182));names.addView(trackTitle);names.addView(detail);Button like=smallButton(track.liked?"♥":"♡"),download=smallButton(offline.contains(track.id)?"✓":"↓");like.setOnClickListener(v->{boolean next=!track.liked;setTrackLiked(track,next,-1);like.setText(next?"♥":"♡");});download.setOnClickListener(v->{if(offline.contains(track.id)){offline.remove(track.id);download.setText("↓");}else{downloadTrack(track,true);download.setText("…");}});row.addView(number,new LinearLayout.LayoutParams(dp(34),dp(54)));row.addView(names,new LinearLayout.LayoutParams(0,dp(54),1));row.addView(like,new LinearLayout.LayoutParams(dp(44),dp(44)));row.addView(download,new LinearLayout.LayoutParams(dp(44),dp(44)));row.setOnClickListener(v->{dialog.dismiss();startQueue(tracks,position,track,true,(album.isEmpty()?"Исполнитель · ":"Альбом · ")+(album.isEmpty()?artist:album));});list.addView(row);}
-            screen.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));play.setOnClickListener(v->{if(tracks.isEmpty())return;dialog.dismiss();startQueue(tracks,0,tracks.get(0),true,album.isEmpty()?artist:album);});shuffle.setOnClickListener(v->{if(tracks.isEmpty())return;java.util.Collections.shuffle(tracks);dialog.dismiss();startQueue(tracks,0,tracks.get(0),true,"Перемешано · "+(album.isEmpty()?artist:album));});close.setOnClickListener(v->{dialog.dismiss();showCatalogBrowser();});dialog.setContentView(screen);dialog.show();if(dialog.getWindow()!=null){dialog.getWindow().setLayout(-1,-1);dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);}applySystemInsets(screen);
+            screen.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));play.setOnClickListener(v->{if(tracks.isEmpty())return;dialog.dismiss();startQueue(tracks,0,tracks.get(0),true,album.isEmpty()?artist:album);});shuffle.setOnClickListener(v->{if(tracks.isEmpty())return;dialog.dismiss();startQueue(tracks,0,tracks.get(0),true,album.isEmpty()?artist:album,true);});close.setOnClickListener(v->{dialog.dismiss();showCatalogBrowser();});dialog.setContentView(screen);dialog.show();if(dialog.getWindow()!=null){dialog.getWindow().setLayout(-1,-1);dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);}applySystemInsets(screen);
             if(album.isEmpty()&&artistId>0)api.get("/artists/"+artistId,new UiCallback(){@Override void ok(JSONObject card){String image=card.optString("image_url");if(!image.isEmpty())images.load(image,art);meta.setText(card.optInt("track_count")+" треков · "+card.optInt("album_count")+" альбомов · "+card.optInt("featured_count")+" feat. · "+card.optLong("play_count")+" просл.");String bio=card.optString("bio");if(!bio.isEmpty())info.addView(label(bio,13,Color.rgb(196,199,208)),2,margin(-1,-2,0,0,0,9));JSONArray albums=card.optJSONArray("albums");if(albums!=null&&albums.length()>0){HorizontalScrollView horizontal=new HorizontalScrollView(MainActivity.this);horizontal.setHorizontalScrollBarEnabled(false);LinearLayout albumRow=new LinearLayout(MainActivity.this);albumRow.setOrientation(LinearLayout.HORIZONTAL);for(int i=0;i<albums.length();i++){JSONObject item=albums.optJSONObject(i);Button albumButton=smallButton(item.optString("name")+" · "+item.optInt("track_count"));albumButton.setOnClickListener(v->{dialog.dismiss();showCollectionPage(artist,item.optString("name"),artistId,item.optLong("id"));});albumRow.addView(albumButton,margin(-2,dp(42),0,0,8,0));}horizontal.addView(albumRow);screen.addView(horizontal,2,new LinearLayout.LayoutParams(-1,dp(50)));}}@Override void fail(String message){}});
             if(!album.isEmpty()&&albumId>0)api.get("/albums/"+albumId,new UiCallback(){@Override void ok(JSONObject card){String image=card.optString("image_url");if(!image.isEmpty())images.load(image,art);String albumArtist=card.optString("artist",artist);int year=card.optInt("year");meta.setText(albumArtist+" · "+tracks.size()+" треков · "+Math.max(1,totalSeconds/60)+" мин."+(year>0?" · "+year:""));String bio=card.optString("bio");if(!bio.isEmpty())info.addView(label(bio,13,Color.rgb(196,199,208)),2,margin(-1,-2,0,0,0,9));}@Override void fail(String message){}});
         }@Override void fail(String message){toast(message);}});
@@ -533,8 +537,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
             @Override void ok(JSONObject json) {
                 List<Track> tracks = tracksFrom(json);
                 if (tracks.isEmpty()) { toast("В коллекции пока нет треков"); return; }
-                if (shuffle) java.util.Collections.shuffle(tracks);
-                startQueue(tracks, 0, tracks.get(0), true, shuffle ? "Перемешано · Мне нравится" : "Мне нравится");
+                startQueue(tracks, 0, tracks.get(0), true, "Мне нравится", shuffle);
             }
             @Override void fail(String message) { toast(message); }
         });
@@ -885,13 +888,17 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         if (!selected.streamAvailable) { toast("Сервер с этой песней временно недоступен"); return; }
         final String sourceName = currentQueueSource();
         if (playFromCurrentQueue(selected, sourceName)) return;
-        startQueue(new ArrayList<>(adapter.tracks()), position, selected, true, sourceName);
+        rebuildCurrentQueue(selected, sourceName);
     }
 
     private boolean playFromCurrentQueue(Track selected, String sourceName) {
         if (controller == null) return false;
+        List<String> queueIds = new ArrayList<>();
+        for (int index = 0; index < controller.getMediaItemCount(); index++) queueIds.add(controller.getMediaItemAt(index).mediaId);
+        if (PlaybackQueuePolicy.selectionAction(queueIds, selected.id) == PlaybackQueuePolicy.SelectionAction.REBUILD) return false;
         for (int index = 0; index < controller.getMediaItemCount(); index++) {
             if (!selected.id.equals(controller.getMediaItemAt(index).mediaId)) continue;
+            queueBuildGeneration++;
             queueSource = sourceName;
             playbackTracks.put(selected.id, selected);
             lastPlayingId = selected.id;
@@ -902,22 +909,27 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
             updatePlayer();
             return true;
         }
-        if (controller.getMediaItemCount() > 0 && sourceName.equals(queueSource)) {
-            int current = controller.getCurrentMediaItemIndex();
-            int insertion = current == androidx.media3.common.C.INDEX_UNSET
-                    ? controller.getMediaItemCount()
-                    : Math.min(controller.getMediaItemCount(), current + 1);
-            playbackTracks.put(selected.id, selected);
-            lastPlayingId = selected.id;
-            controller.addMediaItem(insertion, mediaItemFor(selected));
-            controller.seekToDefaultPosition(insertion);
-            controller.play();
-            recordHistory(selected.id);
-            savePlaybackState();
-            updatePlayer();
-            return true;
-        }
         return false;
+    }
+
+    private void rebuildCurrentQueue(Track selected, String sourceName) {
+        boolean keepShuffle = controller != null && controller.getShuffleModeEnabled();
+        if (downloadedOnly || historyMode) {
+            startQueue(new ArrayList<>(adapter.tracks()), 0, selected, true, sourceName, keepShuffle);
+            return;
+        }
+        final int generation = ++queueBuildGeneration;
+        toast("Обновляем очередь…");
+        api.get(libraryQuery("newest", true, 0, 10000, ""), new UiCallback() {
+            @Override void ok(JSONObject json) {
+                if (generation != queueBuildGeneration) return;
+                List<Track> tracks = tracksFrom(json);
+                startQueue(tracks, 0, selected, true, sourceName, keepShuffle);
+            }
+            @Override void fail(String message) {
+                if (generation == queueBuildGeneration) toast("Не удалось обновить очередь: " + message);
+            }
+        });
     }
 
     private List<Track> tracksFrom(JSONObject json) {
@@ -927,19 +939,28 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
     }
 
     private void startQueue(List<Track> tracks, int position, Track selected, boolean playNow, String sourceName) {
+        startQueue(tracks, position, selected, playNow, sourceName, false);
+    }
+
+    private void startQueue(List<Track> tracks, int position, Track selected, boolean playNow, String sourceName, boolean shuffle) {
+        queueBuildGeneration++;
         queueSource = sourceName;
         List<MediaItem> items = new ArrayList<>();
         playbackTracks.clear();
         int playablePosition = 0;
+        java.util.HashSet<String> added = new java.util.HashSet<>();
         for (Track track : tracks) {
             if (!track.streamAvailable && !offline.contains(track.id)) continue;
+            if (!added.add(track.id)) continue;
             if (track.id.equals(selected.id)) playablePosition = items.size();
             playbackTracks.put(track.id, track);
             items.add(mediaItemFor(track));
         }
         if (items.isEmpty() || !playbackTracks.containsKey(selected.id)) { toast("Трек сейчас недоступен"); return; }
         lastPlayingId = selected.id;
+        controller.setShuffleModeEnabled(false);
         controller.setMediaItems(items, playablePosition, 0);
+        controller.setShuffleModeEnabled(shuffle);
         stateRestored = true; controller.prepare(); if (playNow) controller.play(); recordHistory(selected.id); savePlaybackState(); updatePlayer();
     }
 
@@ -1455,10 +1476,10 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
                             if (track.id.equals(currentId)) currentIndex = restored.size(); restored.add(mediaItemFor(track));
                         }
                         if (!restored.isEmpty() && controller != null) {
-                            controller.setShuffleModeEnabled(saved.optBoolean("shuffle"));
                             String repeat = saved.optString("repeat_mode", "off");
                             controller.setRepeatMode(repeat.equals("one") ? Player.REPEAT_MODE_ONE : repeat.equals("all") ? Player.REPEAT_MODE_ALL : Player.REPEAT_MODE_OFF);
                             controller.setMediaItems(restored, Math.min(currentIndex, restored.size() - 1), Math.max(0, saved.optLong("position_seconds")) * 1000);
+                            controller.setShuffleModeEnabled(saved.optBoolean("shuffle"));
                             controller.prepare(); lastPlayingId = currentId;
                         }
                         stateRestored = true; updatePlayer();
@@ -1590,11 +1611,15 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         queueButton.setOnClickListener(view -> showQueue());
         fullSeek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar seekBar, int value, boolean fromUser) { if (fromUser) fullTime.setText(formatTime(value) + "   ·   " + formatTime(effectiveDuration())); }
-            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
-            @Override public void onStopTrackingTouch(SeekBar seekBar) { controller.seekTo(seekBar.getProgress()); }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) { fullSeekGuard.start(controller == null ? seekBar.getProgress() : controller.getCurrentPosition()); }
+            @Override public void onStopTrackingTouch(SeekBar seekBar) {
+                PlayerSeekGuard.Result result = fullSeekGuard.finish(seekBar.getProgress());
+                DiagnosticLog.add(MainActivity.this, "user seek from=" + result.fromMs + " to=" + result.toMs + " track=" + (controller == null || controller.getCurrentMediaItem() == null ? "none" : controller.getCurrentMediaItem().mediaId));
+                if (controller != null) controller.seekTo(result.toMs);
+            }
         });
         playerDialog.setContentView(screen);
-        playerDialog.setOnDismissListener(dialog -> { progressHandler.removeCallbacks(progressUpdate); playerDialog = null; });
+        playerDialog.setOnDismissListener(dialog -> { fullSeekGuard.cancel(); progressHandler.removeCallbacks(progressUpdate); playerDialog = null; });
         playerDialog.show();
         if (playerDialog.getWindow() != null) {
             playerDialog.getWindow().setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
@@ -1726,7 +1751,6 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         if (controller == null) return;
         DiagnosticLog.add(this, "user play/pause track=" + (controller.getCurrentMediaItem() == null ? "none" : controller.getCurrentMediaItem().mediaId) + " state=" + controller.getPlaybackState());
         if (controller.getPlayWhenReady()) controller.pause();
-        else if (controller.getPlaybackState() == Player.STATE_ENDED && controller.getShuffleModeEnabled() && controller.getMediaItemCount() > 1) restartShuffleCycle(true);
         else controller.play();
         updatePlayer();
     }
@@ -1739,15 +1763,8 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
             controller.seekToNextMediaItem();
             controller.prepare();
             if (resume) controller.play();
-        } else if (controller.getShuffleModeEnabled() && controller.getMediaItemCount() > 1) restartShuffleCycle(resume);
-        else controller.stop();
+        } else controller.stop();
         updatePlayer();
-    }
-
-    private void restartShuffleCycle(boolean play) {
-        int first = controller == null ? androidx.media3.common.C.INDEX_UNSET : controller.getCurrentTimeline().getFirstWindowIndex(true);
-        if (first == androidx.media3.common.C.INDEX_UNSET) return;
-        controller.seekToDefaultPosition(first); controller.prepare(); if (play) controller.play(); savePlaybackState();
     }
 
     private String formatTime(long millis) {

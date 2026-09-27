@@ -26,11 +26,15 @@ final class PlaybackRetryGuard {
     }
 
     Decision onError(String failedMediaId) {
+        return onError(failedMediaId, MAX_ATTEMPTS);
+    }
+
+    Decision onError(String failedMediaId, int maxAttempts) {
         String id = failedMediaId == null ? "" : failedMediaId;
         if (!id.equals(mediaId)) transition(id);
         attempts++;
         generation++;
-        return new Decision(generation, attempts, attempts <= MAX_ATTEMPTS);
+        return new Decision(generation, attempts, attempts <= Math.max(0, maxAttempts));
     }
 
     boolean isCurrent(long token, String currentMediaId) {

@@ -15,6 +15,7 @@ import androidx.media3.common.Player;
 import androidx.media3.common.C;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.datasource.cache.CacheWriter;
+import androidx.media3.datasource.HttpDataSource;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
@@ -45,6 +46,7 @@ public final class PlaybackService extends MediaSessionService {
     private final PlaybackRetryGuard retryGuard = new PlaybackRetryGuard();
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
+    private final NetworkLogGuard networkLogGuard = new NetworkLogGuard();
 
     @Override public void onCreate() {
         super.onCreate();
@@ -107,17 +109,15 @@ public final class PlaybackService extends MediaSessionService {
                     retryGuard.recovered();
                     schedulePrefetch(player);
                 }
-                if (state == Player.STATE_ENDED && player.getShuffleModeEnabled() && player.getMediaItemCount() > 1 && player.getRepeatMode() == Player.REPEAT_MODE_OFF) {
-                    int first = player.getCurrentTimeline().getFirstWindowIndex(true);
-                    if (first != androidx.media3.common.C.INDEX_UNSET) { player.seekToDefaultPosition(first); player.prepare(); player.play(); }
-                }
             }
             @Override public void onPlayerError(androidx.media3.common.PlaybackException error) {
                 DiagnosticLog.add(PlaybackService.this, "player error code=" + error.errorCode + " message=" + error.getMessage() + " cause=" + errorCause(error));
                 cancelPrefetch();
                 MediaItem current = player.getCurrentMediaItem();
                 String mediaId = current == null ? "" : current.mediaId;
-                PlaybackRetryGuard.Decision decision = retryGuard.onError(mediaId);
+                boolean unavailableRemote = isUnavailableRemote(error, mediaId);
+                PlaybackRetryGuard.Decision decision = retryGuard.onError(mediaId, unavailableRemote ? 1 : PlaybackRetryGuard.MAX_ATTEMPTS);
+                if (unavailableRemote) DiagnosticLog.add(PlaybackService.this, "remote node unavailable, short retry track=" + mediaId);
                 retryHandler.removeCallbacksAndMessages(null);
                 if (current != null && decision.retry) {
                     if (decision.attempt == 1) {
@@ -157,6 +157,18 @@ public final class PlaybackService extends MediaSessionService {
         if (remaining > 0) sleepHandler.postDelayed(sleepPause, remaining); else new AppSettings(this).putLong("sleep_deadline", 0);
     }
 
+    private static boolean isUnavailableRemote(androidx.media3.common.PlaybackException error, String mediaId) {
+        if (mediaId == null || !mediaId.startsWith("remote:")) return false;
+        Throwable cause = error;
+        for (int depth = 0; cause != null && depth < 12; depth++, cause = cause.getCause()) {
+            if (cause instanceof HttpDataSource.InvalidResponseCodeException) {
+                int code = ((HttpDataSource.InvalidResponseCodeException) cause).responseCode;
+                return code == 502 || code == 503;
+            }
+        }
+        return false;
+    }
+
     private static String discontinuityName(int reason) {
         return switch (reason) {
             case Player.DISCONTINUITY_REASON_AUTO_TRANSITION -> "auto";
@@ -183,17 +195,26 @@ public final class PlaybackService extends MediaSessionService {
     private void registerNetworkLogging() {
         connectivityManager = (ConnectivityManager)getSystemService(CONNECTIVITY_SERVICE);
         networkCallback = new ConnectivityManager.NetworkCallback() {
-            @Override public void onAvailable(Network network) { logNetwork("available", network); }
-            @Override public void onLost(Network network) { DiagnosticLog.add(PlaybackService.this, "network lost=" + network); }
-            @Override public void onCapabilitiesChanged(Network network, NetworkCapabilities capabilities) { logNetwork("changed", network); }
+            @Override public void onAvailable(Network network) { logNetwork(network); }
+            @Override public void onLost(Network network) { if (networkLogGuard.lost(network.toString())) DiagnosticLog.add(PlaybackService.this, "network lost"); }
+            @Override public void onCapabilitiesChanged(Network network, NetworkCapabilities capabilities) { logNetwork(network, capabilities); }
         };
         try { connectivityManager.registerDefaultNetworkCallback(networkCallback); } catch (RuntimeException error) { DiagnosticLog.add(this, "network callback unavailable=" + error.getClass().getSimpleName()); }
     }
 
-    private void logNetwork(String event, Network network) {
+    private void logNetwork(Network network) {
         NetworkCapabilities capabilities = connectivityManager == null ? null : connectivityManager.getNetworkCapabilities(network);
-        String transport = capabilities == null ? "unknown" : capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ? "wifi" : capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ? "cellular" : capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN) ? "vpn" : "other";
-        DiagnosticLog.add(this, "network " + event + "=" + transport + " validated=" + (capabilities != null && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)));
+        logNetwork(network, capabilities);
+    }
+
+    private void logNetwork(Network network, NetworkCapabilities capabilities) {
+        String state = capabilities == null ? "transport=unknown validated=false vpn=false" : NetworkLogGuard.describe(
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI),
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR),
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET),
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN),
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED));
+        if (networkLogGuard.update(network.toString(), state)) DiagnosticLog.add(this, "network " + state);
     }
 
     private void recreateLoudnessEnhancer() {

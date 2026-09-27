@@ -32,4 +32,11 @@ public class PlaybackRetryGuardTest {
         assertFalse(guard.isCurrent(stale.token, "track"));
         assertTrue(guard.onError("track").retry);
     }
+
+    @Test public void unavailableRemoteGetsOneShortRetry() {
+        PlaybackRetryGuard guard = new PlaybackRetryGuard();
+        guard.transition("remote:track");
+        assertTrue(guard.onError("remote:track", 1).retry);
+        assertFalse(guard.onError("remote:track", 1).retry);
+    }
 }
