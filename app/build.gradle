@@ -20,8 +20,8 @@ android {
         applicationId applicationIdentifier
         minSdk 26
         targetSdk 36
-        versionCode 141
-        versionName '1.0.41'
+        versionCode 146
+        versionName '1.0.46'
         buildConfigField 'String', 'SERVER_ORIGIN', '"' + serverOrigin + '"'
     }
 

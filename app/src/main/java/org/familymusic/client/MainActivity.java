@@ -23,9 +23,12 @@ import android.text.Editable;
 import android.text.InputType;
 import android.text.TextWatcher;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
+import android.view.animation.DecelerateInterpolator;
+import android.view.animation.OvershootInterpolator;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -175,6 +178,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
     private ActivityResultLauncher<String> coverPicker;
     private Track pendingCoverTrack;
     private boolean uploadReceiverRegistered;
+    private boolean showingLogin;
     private final BroadcastReceiver uploadReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
             String message = intent.getStringExtra(UploadService.EXTRA_MESSAGE);
@@ -220,6 +224,10 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
                 api.get("/me", new UiCallback() {
                     @Override void ok(JSONObject json) { downloadedOnly = false; likedOnly = true; updateTabs(); loadTracks(); }
                     @Override void fail(String message) { /* Offline library is already usable. */ }
+                    @Override void failStatus(int status, String message) {
+                        if (ApiClient.isAuthenticationFailure(status)) { api.clearSession(); showLogin(); }
+                        else fail(message);
+                    }
                 });
             }
             else verifySession();
@@ -241,6 +249,8 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
     }
 
     private void showLogin() {
+        if (showingLogin) return;
+        showingLogin = true;
         if (connectManager != null) connectManager.stop();
         disconnectController();
         android.widget.FrameLayout root = new android.widget.FrameLayout(this);
@@ -313,6 +323,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
     }
 
     private void showLibrary() {
+        showingLogin = false;
         disconnectController();
         if (!initialTabApplied && !downloadedOnly) {
             String tab = settings.startTab(); if (tab.equals("last")) tab = settings.lastTab();
@@ -904,10 +915,11 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         if (connectRemoteActive()) {
             JSONArray remoteQueue = connectState.optJSONArray("queue"); boolean found = false;
             if (remoteQueue != null) for (int index = 0; index < remoteQueue.length(); index++) if (selected.id.equals(remoteQueue.optString(index))) { found = true; break; }
-            if (found) {
+            if (found && sourceName.equals(queueSource)) {
                 try {
                     JSONObject snapshot = new JSONObject(connectState.toString());
-                    snapshot.put("track_id", selected.id).put("position_seconds", 0).put("duration_seconds", selected.durationSeconds).put("playing", true);
+                    snapshot.put("track_id", selected.id).put("position_seconds", 0).put("duration_seconds", selected.durationSeconds)
+                            .put("playing", true).put("queue_source", sourceName);
                     connectManager.transfer(connectManager.deviceId(), snapshot, new UiCallback() {
                         @Override void ok(JSONObject json) { toast("Переносим воспроизведение на телефон…"); }
                         @Override void fail(String message) { toast(message); }
@@ -926,7 +938,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         if (controller == null) return false;
         List<String> queueIds = new ArrayList<>();
         for (int index = 0; index < controller.getMediaItemCount(); index++) queueIds.add(controller.getMediaItemAt(index).mediaId);
-        if (PlaybackQueuePolicy.selectionAction(queueIds, selected.id) == PlaybackQueuePolicy.SelectionAction.REBUILD) return false;
+        if (PlaybackQueuePolicy.selectionAction(queueIds, selected.id, queueSource, sourceName) == PlaybackQueuePolicy.SelectionAction.REBUILD) return false;
         for (int index = 0; index < controller.getMediaItemCount(); index++) {
             if (!selected.id.equals(controller.getMediaItemAt(index).mediaId)) continue;
             queueBuildGeneration++;
@@ -999,6 +1011,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
             try {
                 snapshot.put("track_id", selected.id).put("position_seconds", 0).put("duration_seconds", selected.durationSeconds)
                         .put("queue", ids).put("playing", playNow).put("shuffle", shuffle)
+                        .put("queue_source", sourceName)
                         .put("repeat_mode", connectState == null ? "off" : connectState.optString("repeat_mode", "off"));
             } catch (Exception ignored) {}
             connectManager.transfer(connectManager.deviceId(), snapshot, new UiCallback() {
@@ -1512,7 +1525,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
                 boolean playing = connectState.optBoolean("playing");
                 playPause.setImageResource(playing ? R.drawable.ic_player_pause : R.drawable.ic_player_play);
                 playPause.setContentDescription(playing ? "Пауза на активном устройстве" : "Воспроизвести на активном устройстве");
-                if (remote == null || coverFor(remote).isEmpty()) nowCover.setImageResource(R.drawable.ic_music_note); else images.load(coverFor(remote), nowCover);
+                if (remote == null || coverFor(remote).isEmpty()) showDefaultCover(nowCover); else images.load(coverFor(remote), nowCover);
                 updateFullPlayer();
                 return;
             }
@@ -1525,7 +1538,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
             playPause.setContentDescription(controller.isPlaying() ? "Пауза" : "Воспроизвести");
             String mediaId = controller.getCurrentMediaItem() == null ? "" : controller.getCurrentMediaItem().mediaId;
             Track current = adapter == null ? null : adapter.tracks().stream().filter(track -> track.id.equals(mediaId)).findFirst().orElse(null);
-            if (current == null) nowCover.setImageResource(R.drawable.ic_music_note); else images.load(coverFor(current), nowCover);
+            if (current == null) showDefaultCover(nowCover); else images.load(coverFor(current), nowCover);
             updateFullPlayer();
         });
     }
@@ -1587,14 +1600,19 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         remoteSeekGuard.observe(Math.round(Math.max(0,state.optDouble("position_seconds"))*1000),state.optBoolean("playing"),trackId,state.optLong("playback_epoch"),connectRemoteStateReceivedAt);
         if (trackId.isEmpty()) { connectRemoteTrack = null; connectRemoteTrackId = ""; updatePlayer(); return; }
         if (trackId.equals(connectRemoteTrackId)) { updatePlayer(); return; }
-        connectRemoteTrackId = trackId; connectRemoteTrack = null; updatePlayer();
+        // Keep presenting the previous remote track until the replacement has
+        // been resolved. Clearing it here briefly exposed the phone's local
+        // Media3 metadata in the full player during every remote transition.
+        connectRemoteTrackId = trackId;
         JSONArray ids = new JSONArray(); ids.put(trackId); JSONObject body = new JSONObject(); try { body.put("ids", ids); } catch (Exception ignored) {}
         api.post("/tracks/resolve", body, new UiCallback() {
             @Override void ok(JSONObject json) {
                 if (!connectRemoteActive() || !trackId.equals(connectState.optString("track_id"))) return;
                 List<Track> tracks = tracksFrom(json); connectRemoteTrack = tracks.isEmpty() ? null : tracks.get(0); updatePlayer();
             }
-            @Override void fail(String message) { if (trackId.equals(connectRemoteTrackId)) updatePlayer(); }
+            @Override void fail(String message) {
+                if (trackId.equals(connectRemoteTrackId)) { connectRemoteTrack = null; updatePlayer(); }
+            }
         });
     }
 
@@ -1614,7 +1632,8 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
             body.put("track_id",current==null?JSONObject.NULL:current.mediaId).put("position_seconds",controller==null?0:Math.max(0,controller.getCurrentPosition())/1000.0)
                     .put("duration_seconds",controller==null||effectiveDuration()==androidx.media3.common.C.TIME_UNSET?0:Math.max(0,effectiveDuration())/1000.0)
                     .put("queue",items).put("playing",controller!=null&&controller.getPlayWhenReady()).put("shuffle",controller!=null&&controller.getShuffleModeEnabled())
-                    .put("repeat_mode",controller!=null&&controller.getRepeatMode()==Player.REPEAT_MODE_ONE?"one":controller!=null&&controller.getRepeatMode()==Player.REPEAT_MODE_ALL?"all":"off");
+                    .put("repeat_mode",controller!=null&&controller.getRepeatMode()==Player.REPEAT_MODE_ONE?"one":controller!=null&&controller.getRepeatMode()==Player.REPEAT_MODE_ALL?"all":"off")
+                    .put("queue_source",queueSource);
         } catch(Exception ignored) {}
         return body;
     }
@@ -1641,7 +1660,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
                     if (selected == null) { completion.finish(false,"Трек недоступен"); return; }
                     handlingConnectCommand = true;
                     try {
-                        startQueue(tracks, 0, selected, payload.optBoolean("playing"), "Family Music Connect", payload.optBoolean("shuffle"));
+                        startQueue(tracks, 0, selected, payload.optBoolean("playing"), payload.optString("queue_source","Family Music Connect"), payload.optBoolean("shuffle"));
                         int currentIndex = mediaItemIndex(currentId);
                         if (currentIndex < 0) { completion.finish(false,"Трек недоступен"); return; }
                         controller.setRepeatMode(payload.optString("repeat_mode").equals("one") ? Player.REPEAT_MODE_ONE : payload.optString("repeat_mode").equals("all") ? Player.REPEAT_MODE_ALL : Player.REPEAT_MODE_OFF);
@@ -1721,6 +1740,11 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         queueButton.setContentDescription("Открыть очередь");
         top.addView(queueButton, new LinearLayout.LayoutParams(dp(48), dp(48)));
         screen.addView(top);
+        LinearLayout gestureCard = column();
+        // The gesture surface must reveal the player's gradient. column() uses
+        // the regular opaque page background, which otherwise appears as a
+        // dark rectangle behind the artwork and track information.
+        gestureCard.setBackgroundColor(Color.TRANSPARENT);
         fullCover = new ImageView(this);
         fullCover.setScaleType(ImageView.ScaleType.CENTER_CROP);
         fullCover.setImageResource(R.drawable.ic_music_note);
@@ -1732,7 +1756,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         LinearLayout.LayoutParams coverLayout = new LinearLayout.LayoutParams(coverSize, coverSize);
         coverLayout.gravity = Gravity.CENTER_HORIZONTAL;
         coverLayout.setMargins(0, dp(18), 0, dp(28));
-        screen.addView(fullCover, coverLayout);
+        gestureCard.addView(fullCover, coverLayout);
         LinearLayout trackInfo = new LinearLayout(this);
         trackInfo.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout textInfo = new LinearLayout(this);
@@ -1753,7 +1777,8 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         trackInfo.addView(textInfo, new LinearLayout.LayoutParams(0, -2, 1));
         fullLike = iconButton(R.drawable.ic_player_heart, "Добавить в Мне нравится", Color.TRANSPARENT);
         trackInfo.addView(fullLike, margin(dp(54), dp(54), 12, 0, 0, 0));
-        screen.addView(trackInfo, margin(-1, -2, 2, 0, 2, 12));
+        gestureCard.addView(trackInfo, margin(-1, -2, 2, 0, 2, 12));
+        screen.addView(gestureCard, new LinearLayout.LayoutParams(-1, -2));
         fullSeek = new SeekBar(this);
         screen.addView(fullSeek, new LinearLayout.LayoutParams(-1, dp(44)));
         fullTime = label("0:00                                      0:00", 12, Color.rgb(190, 181, 190));
@@ -1778,9 +1803,12 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
             if (current == null) toast("Не удалось определить текущий трек");
             else setTrackLiked(current, !current.liked, -1);
         });
-        previous.setOnClickListener(view -> { if(connectRemoteActive())connectManager.command("previous",new JSONObject());else controller.seekToPreviousMediaItem(); });
+        Runnable playPrevious = () -> { if(connectRemoteActive())connectManager.command("previous",new JSONObject());else controller.seekToPreviousMediaItem(); };
+        Runnable playNext = this::skipToNext;
+        previous.setOnClickListener(view -> playPrevious.run());
         fullPlayPause.setOnClickListener(view -> togglePlayback());
-        next.setOnClickListener(view -> skipToNext());
+        next.setOnClickListener(view -> playNext.run());
+        attachPlayerGestures(gestureCard, () -> playerDialog.dismiss(), playPrevious, playNext);
         fullShuffle.setOnClickListener(view -> {
             if(connectRemoteActive()){JSONObject payload=new JSONObject();try{payload.put("enabled",!connectState.optBoolean("shuffle"));}catch(Exception ignored){}connectManager.command("set_shuffle",payload);return;}
             if (controller.getShuffleModeEnabled()) { controller.setShuffleModeEnabled(false); updateFullPlayer(); savePlaybackState(); }
@@ -1813,6 +1841,80 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         updateFullPlayer();
         progressHandler.removeCallbacks(progressUpdate);
         progressHandler.post(progressUpdate);
+    }
+
+    private void attachPlayerGestures(View card, Runnable dismiss, Runnable previous, Runnable next) {
+        final float[] start = new float[2];
+        final boolean[] dragging = {false};
+        final int touchSlop = dp(10);
+        card.setClickable(true);
+        card.setOnTouchListener((view, event) -> {
+            if (event.getPointerCount() > 1) return false;
+            float dx = event.getRawX() - start[0];
+            float dy = event.getRawY() - start[1];
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    start[0] = event.getRawX();
+                    start[1] = event.getRawY();
+                    dragging[0] = false;
+                    view.animate().cancel();
+                    return true;
+                case MotionEvent.ACTION_MOVE:
+                    if (!dragging[0] && Math.hypot(dx, dy) >= touchSlop) dragging[0] = true;
+                    if (!dragging[0]) return true;
+                    boolean horizontal = Math.abs(dx) > Math.abs(dy) * 1.15f;
+                    float distance = horizontal ? Math.abs(dx) : Math.max(0, dy);
+                    float extent = horizontal ? Math.max(1, view.getWidth()) : Math.max(1, view.getHeight());
+                    float ratio = Math.min(1f, distance / extent);
+                    if (horizontal) {
+                        view.setTranslationX(dx);
+                        view.setTranslationY(0);
+                        view.setRotation(dx / Math.max(1, view.getWidth()) * 3f);
+                    } else if (dy > 0) {
+                        view.setTranslationY(dy * .82f);
+                        view.setTranslationX(0);
+                        view.setRotation(0);
+                    }
+                    float scale = 1f - ratio * .045f;
+                    view.setScaleX(scale);
+                    view.setScaleY(scale);
+                    view.setAlpha(1f - ratio * .28f);
+                    return true;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    if (!dragging[0] || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+                        restorePlayerGestureCard(view);
+                        return true;
+                    }
+                    boolean horizontalCommit = Math.abs(dx) > Math.max(dp(72), view.getWidth() * .20f)
+                            && Math.abs(dx) > Math.abs(dy) * 1.15f;
+                    boolean dismissCommit = dy > Math.max(dp(96), view.getHeight() * .18f)
+                            && dy > Math.abs(dx) * 1.15f;
+                    if (horizontalCommit) {
+                        float direction = dx < 0 ? -1f : 1f;
+                        view.animate().translationX(direction * (view.getWidth() + dp(32))).alpha(0f)
+                                .rotation(direction * 4f).setDuration(150).setInterpolator(new DecelerateInterpolator())
+                                .withEndAction(() -> {
+                                    if (direction < 0) next.run(); else previous.run();
+                                    view.setTranslationX(-direction * Math.max(dp(100), view.getWidth() * .35f));
+                                    view.setTranslationY(0); view.setRotation(0); view.setScaleX(.97f); view.setScaleY(.97f);
+                                    view.animate().translationX(0).scaleX(1).scaleY(1).alpha(1f).setDuration(230)
+                                            .setInterpolator(new DecelerateInterpolator()).start();
+                                }).start();
+                    } else if (dismissCommit) {
+                        view.animate().translationY(view.getHeight() + dp(80)).alpha(0f).scaleX(.94f).scaleY(.94f)
+                                .setDuration(190).setInterpolator(new DecelerateInterpolator()).withEndAction(dismiss).start();
+                    } else restorePlayerGestureCard(view);
+                    return true;
+                default:
+                    return true;
+            }
+        });
+    }
+
+    private void restorePlayerGestureCard(View view) {
+        view.animate().translationX(0).translationY(0).rotation(0).scaleX(1).scaleY(1).alpha(1f)
+                .setDuration(260).setInterpolator(new OvershootInterpolator(.75f)).start();
     }
 
     private void updateFullPlayer() {
@@ -1851,11 +1953,18 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
             fullLike.setContentDescription(liked ? "Убрать из Мне нравится" : "Добавить в Мне нравится");
         }
         if (current != null) images.load(coverFor(current), fullCover);
-        else if (metadata.artworkUri != null) {
+        else if (!remotePlayback && metadata.artworkUri != null) {
             String artwork = metadata.artworkUri.toString();
             images.load(artwork.startsWith(ApiClient.ORIGIN) ? artwork.replace(ApiClient.ORIGIN, "") : artwork, fullCover);
         }
-        else fullCover.setImageResource(R.drawable.ic_music_note);
+        else showDefaultCover(fullCover);
+    }
+
+    private void showDefaultCover(ImageView target) {
+        // Invalidate a pending ImageLoader request before installing the
+        // placeholder, otherwise its late callback can flash an obsolete cover.
+        target.setTag("");
+        target.setImageResource(R.drawable.ic_music_note);
     }
 
     private void enableGlobalShuffle() {
@@ -2002,7 +2111,10 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
     abstract class UiCallback implements ApiClient.Callback {
         abstract void ok(JSONObject json);
         abstract void fail(String message);
-        void failStatus(int status, String message) { fail(message); }
+        void failStatus(int status, String message) {
+            if (ApiClient.isAuthenticationFailure(status) && api.hasSession()) { api.clearSession(); showLogin(); }
+            else fail(message);
+        }
         @Override public final void success(JSONObject json) { runOnUiThread(() -> ok(json)); }
         @Override public final void failure(String message) { runOnUiThread(() -> fail(message)); }
         @Override public final void failure(int status, String message) { runOnUiThread(() -> failStatus(status, message)); }
