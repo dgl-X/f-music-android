@@ -104,6 +104,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
     private ImageButton playPause;
     private View likedButton;
     private View allButton;
+    private View albumsButton;
     private View downloadedButton;
     private View historyButton;
     private View playlistsButton;
@@ -187,6 +188,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         }
     };
     private final Map<String, Track> playbackTracks = new HashMap<>();
+    private final Map<String, Integer> catalogScrollPositions = new HashMap<>();
     private final Set<String> downloadsInProgress = new HashSet<>();
     private String lastPlayingId = "";
     private String lastPlaybackErrorMediaId = "";
@@ -349,11 +351,13 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         tabs.setPadding(dp(5), dp(3), dp(5), dp(3)); tabs.setBackgroundColor(Color.rgb(20, 23, 29));
         likedButton = navItem(R.drawable.ic_player_heart_filled, "Нравится");
         allButton = navItem(R.drawable.ic_nav_tracks, "Треки");
+        albumsButton = navItem(R.drawable.ic_nav_album, "Каталог");
         playlistsButton = navItem(R.drawable.ic_nav_playlist, "Плейлисты");
         downloadedButton = navItem(R.drawable.ic_nav_download, "Скачано");
         historyButton = navItem(R.drawable.ic_nav_history, "История");
         tabs.addView(likedButton, new LinearLayout.LayoutParams(0, dp(58), 1));
         tabs.addView(allButton, new LinearLayout.LayoutParams(0, dp(58), 1));
+        tabs.addView(albumsButton, new LinearLayout.LayoutParams(0, dp(58), 1));
         tabs.addView(playlistsButton, new LinearLayout.LayoutParams(0, dp(58), 1));
         tabs.addView(downloadedButton, new LinearLayout.LayoutParams(0, dp(58), 1));
         tabs.addView(historyButton, new LinearLayout.LayoutParams(0, dp(58), 1));
@@ -408,6 +412,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         sectionBack.setOnClickListener(view -> showPlaylistChooser());
         likedButton.setOnClickListener(view -> { settings.putString("last_tab", "liked"); historyMode = false; playlistMode = false; downloadedOnly = false; likedOnly = true; updateTabs(); loadTracks(); });
         allButton.setOnClickListener(view -> { settings.putString("last_tab", "all"); historyMode = false; playlistMode = false; downloadedOnly = false; likedOnly = false; updateTabs(); loadTracks(); });
+        albumsButton.setOnClickListener(view -> showAlbumBrowser());
         downloadedButton.setOnClickListener(view -> { settings.putString("last_tab", "downloaded"); historyMode = false; playlistMode = false; downloadedOnly = true; likedOnly = false; updateTabs(); loadTracks(); });
         historyButton.setOnClickListener(view -> { settings.putString("last_tab", "history"); historyMode = true; playlistMode = false; downloadedOnly = false; likedOnly = false; updateTabs(); loadTracks(); });
         playlistsButton.setOnClickListener(view -> showPlaylistChooser());
@@ -468,20 +473,49 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         }@Override void fail(String message){toast(message);}});
     }
 
+    private void showAlbumBrowser(){
+        showCatalogSections("albums");
+    }
+
+    private void showCatalogSections(String initialView){
+        Dialog dialog=new Dialog(this);dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);LinearLayout screen=column();screen.setPadding(dp(14),dp(8),dp(14),dp(18));LinearLayout top=new LinearLayout(this);top.setGravity(Gravity.CENTER_VERTICAL);Button close=smallButton("‹");close.setTextSize(28);TextView heading=label("Каталог",22,Color.WHITE);heading.setTypeface(null,android.graphics.Typeface.BOLD);heading.setGravity(Gravity.CENTER);top.addView(close,new LinearLayout.LayoutParams(dp(52),dp(52)));top.addView(heading,new LinearLayout.LayoutParams(0,dp(52),1));top.addView(new View(this),new LinearLayout.LayoutParams(dp(52),dp(52)));screen.addView(top);LinearLayout sections=new LinearLayout(this);sections.setPadding(dp(4),dp(3),dp(4),dp(3));sections.setBackground(round(Color.rgb(25,28,35),13));Button albums=smallButton("Альбомы"),artists=smallButton("Исполнители");sections.addView(albums,new LinearLayout.LayoutParams(0,dp(44),1));sections.addView(artists,new LinearLayout.LayoutParams(0,dp(44),1));screen.addView(sections,margin(-1,dp(50),0,4,0,8));
+        EditText search=input("Название альбома или исполнитель",false);search.setTextSize(14);screen.addView(search,margin(-1,dp(46),0,0,0,8));TextView state=label("Загрузка…",13,Color.rgb(167,171,182));screen.addView(state,margin(-1,dp(30),4,0,4,4));ScrollView scroll=new ScrollView(this);LinearLayout content=column();scroll.addView(content);screen.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
+        class CatalogLoader { int generation,offset,total;boolean loading;String query="",view=initialView.equals("artists")?"artists":"albums";void select(String nextView){if(!nextView.equals(view)||content.getChildCount()>0)catalogScrollPositions.put(view,scroll.getScrollY());view=nextView;albums.setTextColor(view.equals("albums")?Color.rgb(255,77,115):Color.WHITE);artists.setTextColor(view.equals("artists")?Color.rgb(255,77,115):Color.WHITE);albums.setBackground(round(view.equals("albums")?Color.rgb(57,31,43):Color.TRANSPARENT,11));artists.setBackground(round(view.equals("artists")?Color.rgb(57,31,43):Color.TRANSPARENT,11));search.setHint(view.equals("albums")?"Название альбома или исполнитель":"Имя исполнителя");if(search.length()>0)search.setText("");else reset();}void reset(){generation++;offset=0;total=0;loading=false;query=search.getText().toString().trim();content.removeAllViews();next();}void cancel(){catalogScrollPositions.put(view,scroll.getScrollY());generation++;loading=false;}void next(){if(loading||offset>0&&offset>=total)return;loading=true;int request=generation,requestedOffset=offset;String requestView=view;state.setText(requestedOffset==0?"Загрузка…":"Загружаем ещё…");api.get("/catalog?view="+requestView+"&limit=50&offset="+requestedOffset+(query.isEmpty()?"":"&q="+Uri.encode(query)),new UiCallback(){@Override void ok(JSONObject json){if(request!=generation||!dialog.isShowing()||!requestView.equals(view))return;loading=false;JSONArray items=json.optJSONArray("items");int count=items==null?0:items.length();if(requestedOffset==0)content.removeAllViews();if(items!=null)for(int i=0;i<items.length();i++){JSONObject item=items.optJSONObject(i);if(view.equals("albums"))addAlbumCard(content,item,dialog);else addArtistCard(content,item,dialog);}offset=requestedOffset+count;total=json.optInt("total",offset);state.setText(total==0?(view.equals("albums")?"Альбомы не найдены":"Исполнители не найдены"):"Показано "+offset+" из "+total);scroll.post(()->{if(requestedOffset==0)scroll.scrollTo(0,catalogScrollPositions.getOrDefault(view,0));if(offset<total&&content.getHeight()-scroll.getScrollY()<=scroll.getHeight()+dp(320))next();});}@Override void fail(String message){if(request==generation){loading=false;state.setText(message);}}});}}CatalogLoader loader=new CatalogLoader();Runnable refresh=loader::reset;
+        albums.setOnClickListener(v->loader.select("albums"));artists.setOnClickListener(v->loader.select("artists"));
+        scroll.setOnScrollChangeListener((view,x,y,oldX,oldY)->{catalogScrollPositions.put(loader.view,y);if(y>oldY&&content.getHeight()-y<=scroll.getHeight()+dp(320))loader.next();});search.addTextChangedListener(new TextWatcher(){@Override public void beforeTextChanged(CharSequence value,int start,int count,int after){}@Override public void onTextChanged(CharSequence value,int start,int before,int count){catalogScrollPositions.put(loader.view,0);searchHandler.removeCallbacks(refresh);searchHandler.postDelayed(refresh,300);}@Override public void afterTextChanged(Editable value){}});close.setOnClickListener(v->dialog.dismiss());dialog.setOnDismissListener(v->{loader.cancel();searchHandler.removeCallbacks(refresh);updateTabs();});dialog.setContentView(screen);dialog.show();if(dialog.getWindow()!=null){dialog.getWindow().setLayout(-1,-1);dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);}applySystemInsets(screen);setNavActive(albumsButton,true);loader.select(initialView);
+    }
+
+    private void addAlbumCard(LinearLayout content,JSONObject item,Dialog parent){
+        if(item==null)return;LinearLayout row=new LinearLayout(this);row.setGravity(Gravity.CENTER_VERTICAL);row.setPadding(dp(6),dp(6),dp(12),dp(6));row.setBackground(round(Color.rgb(25,28,35),14));ImageView cover=new ImageView(this);cover.setScaleType(ImageView.ScaleType.CENTER_CROP);cover.setImageResource(R.drawable.ic_music_note);cover.setBackground(round(Color.rgb(38,42,52),11));cover.setClipToOutline(true);String image=item.optString("image_url"),coverId=item.optString("cover_track_id");if(!image.isEmpty())images.load(image,cover);else if(!coverId.isEmpty())images.load("/api/v1/tracks/"+coverId+"/cover",cover);LinearLayout text=column();text.setBackgroundColor(Color.TRANSPARENT);TextView name=label(item.optString("name"),16,Color.WHITE);name.setTypeface(null,android.graphics.Typeface.BOLD);name.setSingleLine(true);name.setEllipsize(android.text.TextUtils.TruncateAt.END);String details=item.optString("artist")+" · "+item.optInt("track_count")+" "+trackWord(item.optInt("track_count"))+(item.optInt("year")>0?" · "+item.optInt("year"):"");TextView meta=label(details,12,Color.rgb(167,171,182));meta.setSingleLine(true);meta.setEllipsize(android.text.TextUtils.TruncateAt.END);text.addView(name);text.addView(meta);row.addView(cover,new LinearLayout.LayoutParams(dp(68),dp(68)));LinearLayout.LayoutParams textParams=new LinearLayout.LayoutParams(0,dp(68),1);textParams.setMargins(dp(13),0,0,0);row.addView(text,textParams);row.setOnClickListener(v->{parent.dismiss();showAlbumCollectionPage(item.optString("artist"),item.optString("name"),item.optLong("id"));});content.addView(row,margin(-1,dp(80),0,0,0,9));
+    }
+
+    private void addArtistCard(LinearLayout content,JSONObject item,Dialog parent){
+        if(item==null)return;LinearLayout row=new LinearLayout(this);row.setGravity(Gravity.CENTER_VERTICAL);row.setPadding(dp(6),dp(6),dp(12),dp(6));row.setBackground(round(Color.rgb(25,28,35),14));ImageView image=new ImageView(this);image.setScaleType(ImageView.ScaleType.CENTER_CROP);image.setImageResource(R.drawable.ic_music_note);GradientDrawable circle=new GradientDrawable();circle.setShape(GradientDrawable.OVAL);circle.setColor(Color.rgb(38,42,52));image.setBackground(circle);image.setClipToOutline(true);String imageUrl=item.optString("image_url"),coverId=item.optString("cover_track_id");if(!imageUrl.isEmpty())images.load(imageUrl,image);else if(!coverId.isEmpty())images.load("/api/v1/tracks/"+coverId+"/cover",image);LinearLayout text=column();text.setBackgroundColor(Color.TRANSPARENT);TextView name=label(item.optString("name"),16,Color.WHITE);name.setTypeface(null,android.graphics.Typeface.BOLD);name.setSingleLine(true);name.setEllipsize(android.text.TextUtils.TruncateAt.END);int count=item.optInt("track_count");TextView meta=label(count+" "+trackWord(count)+(item.optInt("featured_count")>0?" · "+item.optInt("featured_count")+" feat.":""),12,Color.rgb(167,171,182));text.addView(name);text.addView(meta);row.addView(image,new LinearLayout.LayoutParams(dp(68),dp(68)));LinearLayout.LayoutParams textParams=new LinearLayout.LayoutParams(0,dp(68),1);textParams.setMargins(dp(13),0,0,0);row.addView(text,textParams);row.setOnClickListener(v->{parent.dismiss();showCollectionPage(item.optString("name"),"",item.optLong("id"),0,"artists");});content.addView(row,margin(-1,dp(80),0,0,0,9));
+    }
+
+    private View artistAlbumCard(JSONObject item,String artist,long artistId,Dialog parent){
+        LinearLayout card=column();card.setPadding(dp(5),dp(5),dp(5),dp(8));card.setBackground(round(Color.rgb(25,28,35),15));ImageView cover=new ImageView(this);cover.setScaleType(ImageView.ScaleType.CENTER_CROP);cover.setImageResource(R.drawable.ic_music_note);cover.setBackground(round(Color.rgb(38,42,52),12));cover.setClipToOutline(true);String image=item.optString("image_url"),coverId=item.optString("cover_track_id");if(!image.isEmpty())images.load(image,cover);else if(!coverId.isEmpty())images.load("/api/v1/tracks/"+coverId+"/cover",cover);TextView name=label(item.optString("name"),14,Color.WHITE);name.setTypeface(null,android.graphics.Typeface.BOLD);name.setSingleLine(true);name.setEllipsize(android.text.TextUtils.TruncateAt.END);String details=(item.optInt("year")>0?item.optInt("year")+" · ":"")+item.optInt("track_count")+" "+trackWord(item.optInt("track_count"));TextView meta=label(details,12,Color.rgb(167,171,182));meta.setSingleLine(true);card.addView(cover,new LinearLayout.LayoutParams(dp(126),dp(126)));card.addView(name,margin(dp(126),dp(24),2,7,2,0));card.addView(meta,margin(dp(126),dp(22),2,0,2,0));card.setOnClickListener(v->{parent.dismiss();showCollectionPage(artist,item.optString("name"),artistId,item.optLong("id"));});return card;
+    }
+
+    private void showAlbumCollectionPage(String artist,String album,long albumId){
+        showCollectionPage(artist,album,0,albumId,"albums");
+    }
+
     private void addCatalogRow(LinearLayout content,JSONObject item,boolean album,Dialog parent){
         if(item==null)return;LinearLayout row=new LinearLayout(this);row.setGravity(Gravity.CENTER_VERTICAL);ImageView cover=new ImageView(this);cover.setScaleType(ImageView.ScaleType.CENTER_CROP);cover.setImageResource(R.drawable.ic_music_note);cover.setBackground(round(Color.rgb(38,42,52),11));cover.setClipToOutline(true);String image=item.optString("image_url"),coverId=item.optString("cover_track_id");if(!image.isEmpty())images.load(image,cover);else if(!coverId.isEmpty())images.load("/api/v1/tracks/"+coverId+"/cover",cover);LinearLayout text=column();TextView name=label(item.optString("name"),16,Color.WHITE);name.setTypeface(null,android.graphics.Typeface.BOLD);TextView meta=label((album?item.optString("artist")+" · ":"")+item.optInt("track_count")+" треков"+(item.optInt("year")>0?" · "+item.optInt("year"):""),12,Color.rgb(167,171,182));text.addView(name);text.addView(meta);row.addView(cover,new LinearLayout.LayoutParams(dp(58),dp(58)));LinearLayout.LayoutParams textParams=new LinearLayout.LayoutParams(0,dp(66),1);textParams.setMargins(dp(12),0,0,0);row.addView(text,textParams);row.setBackground(round(Color.rgb(25,28,35),13));row.setOnClickListener(v->{parent.dismiss();showCollectionPage(item.optString("artist",item.optString("name")),album?item.optString("name"):"",album?0:item.optLong("id"),album?item.optLong("id"):0);});content.addView(row,margin(-1,dp(70),0,0,0,8));
     }
 
     private void showCollectionPage(String artist,String album){showCollectionPage(artist,album,0,0);}
     private void showCollectionPage(String artist,String album,long artistId){showCollectionPage(artist,album,artistId,0);}
-    private void showCollectionPage(String artist,String album,long artistId,long albumId){
-        String path="/tracks?queue=1&limit=10000&sort="+(album.isEmpty()?"title":"album")+"&artist="+Uri.encode(artist)+(album.isEmpty()?"":"&album="+Uri.encode(album))+(albumId>0?"&album_id="+albumId:"");api.get(path,new UiCallback(){@Override void ok(JSONObject json){
+    private void showCollectionPage(String artist,String album,long artistId,long albumId){showCollectionPage(artist,album,artistId,albumId,"");}
+    private void showCollectionPage(String artist,String album,long artistId,long albumId,String returnToCatalog){
+        String path="/tracks?queue=1&limit=10000&sort="+(album.isEmpty()?"popular":"album")+"&artist="+Uri.encode(artist)+(album.isEmpty()?"":"&album="+Uri.encode(album))+(albumId>0?"&album_id="+albumId:"");api.get(path,new UiCallback(){@Override void ok(JSONObject json){
             List<Track> tracks=tracksFrom(json);Dialog dialog=new Dialog(MainActivity.this);dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);LinearLayout screen=column();screen.setPadding(dp(14),dp(8),dp(14),dp(18));LinearLayout top=new LinearLayout(MainActivity.this);top.setGravity(Gravity.CENTER_VERTICAL);Button close=smallButton("‹");close.setTextSize(28);TextView heading=label(album.isEmpty()?artist:album,21,Color.WHITE);heading.setTypeface(null,android.graphics.Typeface.BOLD);heading.setGravity(Gravity.CENTER);top.addView(close,new LinearLayout.LayoutParams(dp(52),dp(52)));top.addView(heading,new LinearLayout.LayoutParams(0,dp(52),1));top.addView(new View(MainActivity.this),new LinearLayout.LayoutParams(dp(52),dp(52)));screen.addView(top);
-            LinearLayout hero=new LinearLayout(MainActivity.this);hero.setGravity(Gravity.CENTER_VERTICAL);ImageView art=new ImageView(MainActivity.this);art.setScaleType(ImageView.ScaleType.CENTER_CROP);art.setImageResource(R.drawable.ic_music_note);art.setBackground(round(Color.rgb(38,42,52),14));art.setClipToOutline(true);for(Track track:tracks)if(!track.coverUrl.isEmpty()){images.load(track.coverUrl,art);break;}LinearLayout info=column();TextView title=label(album.isEmpty()?artist:album,22,Color.WHITE);title.setTypeface(null,android.graphics.Typeface.BOLD);long seconds=0;for(Track track:tracks)seconds+=(long)track.durationSeconds;final long totalSeconds=seconds;TextView meta=label((album.isEmpty()?"Исполнитель":artist)+" · "+tracks.size()+" треков · "+Math.max(1,totalSeconds/60)+" мин.",13,Color.rgb(167,171,182));LinearLayout actions=new LinearLayout(MainActivity.this);Button play=button("▶ Слушать"),shuffle=smallButton("Перемешать");actions.addView(play,new LinearLayout.LayoutParams(0,dp(46),1));actions.addView(shuffle,margin(dp(125),dp(46),8,0,0,0));info.addView(title);info.addView(meta,margin(-1,-2,0,5,0,8));info.addView(actions);hero.addView(art,new LinearLayout.LayoutParams(dp(112),dp(112)));LinearLayout.LayoutParams infoParams=new LinearLayout.LayoutParams(0,-2,1);infoParams.setMargins(dp(14),0,0,0);hero.addView(info,infoParams);screen.addView(hero,margin(-1,-2,0,8,0,12));
-            ScrollView scroll=new ScrollView(MainActivity.this);LinearLayout list=column();scroll.addView(list);for(int i=0;i<tracks.size();i++){int position=i;Track track=tracks.get(i);LinearLayout row=new LinearLayout(MainActivity.this);row.setGravity(Gravity.CENTER_VERTICAL);TextView number=label(String.valueOf(i+1),13,Color.rgb(140,144,155));number.setGravity(Gravity.CENTER);LinearLayout names=column();TextView trackTitle=label(track.title,15,Color.WHITE);trackTitle.setSingleLine(true);trackTitle.setEllipsize(android.text.TextUtils.TruncateAt.END);TextView detail=label(track.artist+(track.year==null?"":" · "+track.year),12,Color.rgb(167,171,182));names.addView(trackTitle);names.addView(detail);Button like=smallButton(track.liked?"♥":"♡"),download=smallButton(offline.contains(track.id)?"✓":"↓");like.setOnClickListener(v->{boolean next=!track.liked;setTrackLiked(track,next,-1);like.setText(next?"♥":"♡");});download.setOnClickListener(v->{if(offline.contains(track.id)){offline.remove(track.id);download.setText("↓");}else{downloadTrack(track,true);download.setText("…");}});row.addView(number,new LinearLayout.LayoutParams(dp(34),dp(54)));row.addView(names,new LinearLayout.LayoutParams(0,dp(54),1));row.addView(like,new LinearLayout.LayoutParams(dp(44),dp(44)));row.addView(download,new LinearLayout.LayoutParams(dp(44),dp(44)));row.setOnClickListener(v->{dialog.dismiss();startQueue(tracks,position,track,true,(album.isEmpty()?"Исполнитель · ":"Альбом · ")+(album.isEmpty()?artist:album));});list.addView(row);}
-            screen.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));play.setOnClickListener(v->{if(tracks.isEmpty())return;dialog.dismiss();startQueue(tracks,0,tracks.get(0),true,album.isEmpty()?artist:album);});shuffle.setOnClickListener(v->{if(tracks.isEmpty())return;dialog.dismiss();startQueue(tracks,0,tracks.get(0),true,album.isEmpty()?artist:album,true);});close.setOnClickListener(v->{dialog.dismiss();showCatalogBrowser();});dialog.setContentView(screen);dialog.show();if(dialog.getWindow()!=null){dialog.getWindow().setLayout(-1,-1);dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);}applySystemInsets(screen);
-            if(album.isEmpty()&&artistId>0)api.get("/artists/"+artistId,new UiCallback(){@Override void ok(JSONObject card){String image=card.optString("image_url");if(!image.isEmpty())images.load(image,art);meta.setText(card.optInt("track_count")+" треков · "+card.optInt("album_count")+" альбомов · "+card.optInt("featured_count")+" feat. · "+card.optLong("play_count")+" просл.");String bio=card.optString("bio");if(!bio.isEmpty())info.addView(label(bio,13,Color.rgb(196,199,208)),2,margin(-1,-2,0,0,0,9));JSONArray albums=card.optJSONArray("albums");if(albums!=null&&albums.length()>0){HorizontalScrollView horizontal=new HorizontalScrollView(MainActivity.this);horizontal.setHorizontalScrollBarEnabled(false);LinearLayout albumRow=new LinearLayout(MainActivity.this);albumRow.setOrientation(LinearLayout.HORIZONTAL);for(int i=0;i<albums.length();i++){JSONObject item=albums.optJSONObject(i);Button albumButton=smallButton(item.optString("name")+" · "+item.optInt("track_count"));albumButton.setOnClickListener(v->{dialog.dismiss();showCollectionPage(artist,item.optString("name"),artistId,item.optLong("id"));});albumRow.addView(albumButton,margin(-2,dp(42),0,0,8,0));}horizontal.addView(albumRow);screen.addView(horizontal,2,new LinearLayout.LayoutParams(-1,dp(50)));}}@Override void fail(String message){}});
-            if(!album.isEmpty()&&albumId>0)api.get("/albums/"+albumId,new UiCallback(){@Override void ok(JSONObject card){String image=card.optString("image_url");if(!image.isEmpty())images.load(image,art);String albumArtist=card.optString("artist",artist);int year=card.optInt("year");meta.setText(albumArtist+" · "+tracks.size()+" треков · "+Math.max(1,totalSeconds/60)+" мин."+(year>0?" · "+year:""));String bio=card.optString("bio");if(!bio.isEmpty())info.addView(label(bio,13,Color.rgb(196,199,208)),2,margin(-1,-2,0,0,0,9));}@Override void fail(String message){}});
+            LinearLayout hero=new LinearLayout(MainActivity.this);hero.setGravity(Gravity.CENTER_VERTICAL);hero.setPadding(dp(14),dp(16),dp(14),dp(16));int[] heroColors=album.isEmpty()?new int[]{Color.rgb(82,42,49),Color.rgb(24,24,29)}:new int[]{Color.rgb(76,52,43),Color.rgb(24,24,29)};hero.setBackground(new GradientDrawable(GradientDrawable.Orientation.TL_BR,heroColors));ImageView art=new ImageView(MainActivity.this);art.setScaleType(ImageView.ScaleType.CENTER_CROP);art.setImageResource(R.drawable.ic_music_note);if(album.isEmpty()){GradientDrawable circle=new GradientDrawable();circle.setShape(GradientDrawable.OVAL);circle.setColor(Color.rgb(38,42,52));art.setBackground(circle);}else art.setBackground(round(Color.rgb(38,42,52),14));art.setClipToOutline(true);for(Track track:tracks)if(!track.coverUrl.isEmpty()){images.load(track.coverUrl,art);break;}LinearLayout info=column();info.setBackgroundColor(Color.TRANSPARENT);TextView title=label(album.isEmpty()?artist:album,22,Color.WHITE);title.setTypeface(null,android.graphics.Typeface.BOLD);long seconds=0;for(Track track:tracks)seconds+=(long)track.durationSeconds;final long totalSeconds=seconds;TextView meta=label((album.isEmpty()?"Исполнитель":artist)+" · "+tracks.size()+" треков · "+Math.max(1,totalSeconds/60)+" мин.",13,Color.rgb(205,199,202));LinearLayout actions=new LinearLayout(MainActivity.this);Button play=button("▶ Слушать"),shuffle=smallButton("Перемешать");actions.addView(play,new LinearLayout.LayoutParams(0,dp(46),1));actions.addView(shuffle,margin(dp(125),dp(46),8,0,0,0));info.addView(title);info.addView(meta,margin(-1,-2,0,5,0,8));info.addView(actions);hero.addView(art,new LinearLayout.LayoutParams(dp(112),dp(112)));LinearLayout.LayoutParams infoParams=new LinearLayout.LayoutParams(0,-2,1);infoParams.setMargins(dp(14),0,0,0);hero.addView(info,infoParams);screen.addView(hero,margin(-1,-2,0,8,0,12));if(!album.isEmpty()){Button downloadAlbum=smallButton("↓  Скачать альбом");downloadAlbum.setOnClickListener(v->bulkDownload(tracks));screen.addView(downloadAlbum,margin(-1,dp(46),0,0,0,8));}
+            ScrollView scroll=new ScrollView(MainActivity.this);LinearLayout list=column();scroll.addView(list);list.addView(sectionTitle(album.isEmpty()?"ПОПУЛЯРНЫЕ ТРЕКИ":"ТРЕКИ"));for(int i=0;i<tracks.size();i++){int position=i;Track track=tracks.get(i);LinearLayout row=new LinearLayout(MainActivity.this);row.setGravity(Gravity.CENTER_VERTICAL);TextView number=label(String.valueOf(i+1),13,Color.rgb(140,144,155));number.setGravity(Gravity.CENTER);LinearLayout names=column();TextView trackTitle=label(track.title,15,Color.WHITE);trackTitle.setSingleLine(true);trackTitle.setEllipsize(android.text.TextUtils.TruncateAt.END);TextView detail=label(track.artist+(track.year==null?"":" · "+track.year),12,Color.rgb(167,171,182));names.addView(trackTitle);names.addView(detail);Button like=smallButton(track.liked?"♥":"♡"),download=smallButton(offline.contains(track.id)?"✓":"↓");like.setOnClickListener(v->{boolean next=!track.liked;setTrackLiked(track,next,-1);like.setText(next?"♥":"♡");});download.setOnClickListener(v->{if(offline.contains(track.id)){offline.remove(track.id);download.setText("↓");}else{downloadTrack(track,true);download.setText("…");}});row.addView(number,new LinearLayout.LayoutParams(dp(34),dp(54)));row.addView(names,new LinearLayout.LayoutParams(0,dp(54),1));row.addView(like,new LinearLayout.LayoutParams(dp(44),dp(44)));row.addView(download,new LinearLayout.LayoutParams(dp(44),dp(44)));row.setOnClickListener(v->{dialog.dismiss();startQueue(tracks,position,track,true,(album.isEmpty()?"Исполнитель · ":"Альбом · ")+(album.isEmpty()?artist:album));});list.addView(row);}
+            screen.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));play.setOnClickListener(v->{if(tracks.isEmpty())return;dialog.dismiss();startQueue(tracks,0,tracks.get(0),true,album.isEmpty()?artist:album);});shuffle.setOnClickListener(v->{if(tracks.isEmpty())return;dialog.dismiss();startQueue(tracks,0,tracks.get(0),true,album.isEmpty()?artist:album,true);});close.setOnClickListener(v->{dialog.dismiss();if(returnToCatalog.isEmpty())showCatalogBrowser();else showCatalogSections(returnToCatalog);});dialog.setContentView(screen);dialog.show();if(dialog.getWindow()!=null){dialog.getWindow().setLayout(-1,-1);dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);}applySystemInsets(screen);
+            if(album.isEmpty()&&artistId>0)api.get("/artists/"+artistId,new UiCallback(){@Override void ok(JSONObject card){String image=card.optString("image_url");if(!image.isEmpty())images.load(image,art);meta.setText(card.optInt("track_count")+" треков · "+card.optInt("album_count")+" альбомов · "+card.optInt("featured_count")+" feat. · "+card.optLong("play_count")+" просл.");String bio=card.optString("bio");if(!bio.isEmpty())info.addView(label(bio,13,Color.rgb(220,211,214)),2,margin(-1,-2,0,0,0,9));JSONArray albums=card.optJSONArray("albums");if(albums!=null&&albums.length()>0){LinearLayout section=column();section.addView(sectionTitle("АЛЬБОМЫ"));HorizontalScrollView horizontal=new HorizontalScrollView(MainActivity.this);horizontal.setHorizontalScrollBarEnabled(false);LinearLayout albumRow=new LinearLayout(MainActivity.this);albumRow.setOrientation(LinearLayout.HORIZONTAL);for(int i=0;i<albums.length();i++){JSONObject item=albums.optJSONObject(i);albumRow.addView(artistAlbumCard(item,artist,artistId,dialog),margin(dp(136),dp(190),0,0,10,0));}horizontal.addView(albumRow);section.addView(horizontal,new LinearLayout.LayoutParams(-1,dp(196)));if(tracks.size()>5)section.addView(sectionTitle("ЕЩЁ ТРЕКИ"));list.addView(section,Math.min(6,list.getChildCount()));}}@Override void fail(String message){}});
+            if(!album.isEmpty()&&albumId>0)api.get("/albums/"+albumId,new UiCallback(){@Override void ok(JSONObject card){String image=card.optString("image_url");if(!image.isEmpty())images.load(image,art);String albumArtist=card.optString("artist",artist);int year=card.optInt("year");meta.setText(albumArtist+" · "+tracks.size()+" треков · "+Math.max(1,totalSeconds/60)+" мин."+(year>0?" · "+year:""));meta.setTextColor(Color.rgb(255,170,188));meta.setOnClickListener(v->{long linkedArtist=card.optLong("artist_id");dialog.dismiss();showCollectionPage(albumArtist,"",linkedArtist,0,"artists");});String bio=card.optString("bio");if(!bio.isEmpty())info.addView(label(bio,13,Color.rgb(196,199,208)),2,margin(-1,-2,0,0,0,9));}@Override void fail(String message){}});
         }@Override void fail(String message){toast(message);}});
     }
 
@@ -827,6 +861,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
     private void updateTabs() {
         setNavActive(likedButton, !historyMode && !downloadedOnly && likedOnly);
         setNavActive(allButton, !historyMode && !playlistMode && !downloadedOnly && !likedOnly);
+        setNavActive(albumsButton, false);
         setNavActive(playlistsButton, playlistMode);
         setNavActive(downloadedButton, downloadedOnly);
         setNavActive(historyButton, historyMode);
@@ -1808,7 +1843,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         previous.setOnClickListener(view -> playPrevious.run());
         fullPlayPause.setOnClickListener(view -> togglePlayback());
         next.setOnClickListener(view -> playNext.run());
-        attachPlayerGestures(gestureCard, () -> playerDialog.dismiss(), playPrevious, playNext);
+        attachPlayerGestures(gestureCard, screen, () -> playerDialog.dismiss(), playPrevious, playNext);
         fullShuffle.setOnClickListener(view -> {
             if(connectRemoteActive()){JSONObject payload=new JSONObject();try{payload.put("enabled",!connectState.optBoolean("shuffle"));}catch(Exception ignored){}connectManager.command("set_shuffle",payload);return;}
             if (controller.getShuffleModeEnabled()) { controller.setShuffleModeEnabled(false); updateFullPlayer(); savePlaybackState(); }
@@ -1843,9 +1878,10 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         progressHandler.post(progressUpdate);
     }
 
-    private void attachPlayerGestures(View card, Runnable dismiss, Runnable previous, Runnable next) {
+    private void attachPlayerGestures(View card, View playerScreen, Runnable dismiss, Runnable previous, Runnable next) {
         final float[] start = new float[2];
         final boolean[] dragging = {false};
+        final boolean[] horizontalDrag = {false};
         final int touchSlop = dp(10);
         card.setClickable(true);
         card.setOnTouchListener((view, event) -> {
@@ -1857,39 +1893,47 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
                     start[0] = event.getRawX();
                     start[1] = event.getRawY();
                     dragging[0] = false;
+                    horizontalDrag[0] = false;
                     view.animate().cancel();
+                    playerScreen.animate().cancel();
                     return true;
                 case MotionEvent.ACTION_MOVE:
-                    if (!dragging[0] && Math.hypot(dx, dy) >= touchSlop) dragging[0] = true;
+                    if (!dragging[0] && Math.hypot(dx, dy) >= touchSlop) {
+                        dragging[0] = true;
+                        horizontalDrag[0] = Math.abs(dx) > Math.abs(dy) * 1.15f;
+                    }
                     if (!dragging[0]) return true;
-                    boolean horizontal = Math.abs(dx) > Math.abs(dy) * 1.15f;
-                    float distance = horizontal ? Math.abs(dx) : Math.max(0, dy);
-                    float extent = horizontal ? Math.max(1, view.getWidth()) : Math.max(1, view.getHeight());
+                    float distance = horizontalDrag[0] ? Math.abs(dx) : Math.max(0, dy);
+                    float extent = horizontalDrag[0] ? Math.max(1, view.getWidth()) : Math.max(1, playerScreen.getHeight());
                     float ratio = Math.min(1f, distance / extent);
-                    if (horizontal) {
+                    View animatedView = horizontalDrag[0] ? view : playerScreen;
+                    if (horizontalDrag[0]) {
+                        restorePlayerGestureCard(playerScreen, 0);
                         view.setTranslationX(dx);
                         view.setTranslationY(0);
                         view.setRotation(dx / Math.max(1, view.getWidth()) * 3f);
                     } else if (dy > 0) {
-                        view.setTranslationY(dy * .82f);
-                        view.setTranslationX(0);
-                        view.setRotation(0);
+                        restorePlayerGestureCard(view, 0);
+                        playerScreen.setTranslationY(dy * .82f);
+                        playerScreen.setTranslationX(0);
+                        playerScreen.setRotation(0);
                     }
                     float scale = 1f - ratio * .045f;
-                    view.setScaleX(scale);
-                    view.setScaleY(scale);
-                    view.setAlpha(1f - ratio * .28f);
+                    animatedView.setScaleX(scale);
+                    animatedView.setScaleY(scale);
+                    animatedView.setAlpha(1f - ratio * .28f);
                     return true;
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL:
                     if (!dragging[0] || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
                         restorePlayerGestureCard(view);
+                        restorePlayerGestureCard(playerScreen);
                         return true;
                     }
-                    boolean horizontalCommit = Math.abs(dx) > Math.max(dp(72), view.getWidth() * .20f)
-                            && Math.abs(dx) > Math.abs(dy) * 1.15f;
-                    boolean dismissCommit = dy > Math.max(dp(96), view.getHeight() * .18f)
-                            && dy > Math.abs(dx) * 1.15f;
+                    boolean horizontalCommit = horizontalDrag[0]
+                            && Math.abs(dx) > Math.max(dp(72), view.getWidth() * .20f);
+                    boolean dismissCommit = !horizontalDrag[0]
+                            && dy > Math.max(dp(96), playerScreen.getHeight() * .18f);
                     if (horizontalCommit) {
                         float direction = dx < 0 ? -1f : 1f;
                         view.animate().translationX(direction * (view.getWidth() + dp(32))).alpha(0f)
@@ -1902,9 +1946,12 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
                                             .setInterpolator(new DecelerateInterpolator()).start();
                                 }).start();
                     } else if (dismissCommit) {
-                        view.animate().translationY(view.getHeight() + dp(80)).alpha(0f).scaleX(.94f).scaleY(.94f)
+                        playerScreen.animate().translationY(playerScreen.getHeight() + dp(80)).alpha(0f).scaleX(.94f).scaleY(.94f)
                                 .setDuration(190).setInterpolator(new DecelerateInterpolator()).withEndAction(dismiss).start();
-                    } else restorePlayerGestureCard(view);
+                    } else {
+                        restorePlayerGestureCard(view);
+                        restorePlayerGestureCard(playerScreen);
+                    }
                     return true;
                 default:
                     return true;
@@ -1913,8 +1960,12 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
     }
 
     private void restorePlayerGestureCard(View view) {
+        restorePlayerGestureCard(view, 260);
+    }
+
+    private void restorePlayerGestureCard(View view, long durationMs) {
         view.animate().translationX(0).translationY(0).rotation(0).scaleX(1).scaleY(1).alpha(1f)
-                .setDuration(260).setInterpolator(new OvershootInterpolator(.75f)).start();
+                .setDuration(durationMs).setInterpolator(new OvershootInterpolator(.75f)).start();
     }
 
     private void updateFullPlayer() {
