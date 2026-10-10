@@ -11,6 +11,10 @@ final class AppSettings {
     String autoSaveMode() { return values.getString("auto_save_mode", "after_listen"); }
     long cacheBytes() { return values.getLong("cache_bytes", 1024L * 1024L * 1024L); }
     long prefetchBytes() { return values.getLong("prefetch_bytes", 3L * 1024L * 1024L); }
+    boolean smartCacheEnabled() { return values.getBoolean("smart_cache_enabled", true); }
+    boolean smartCacheWifiOnly() { return values.getBoolean("smart_cache_wifi_only", true); }
+    int smartCacheDepth() { return Math.max(1, Math.min(5, values.getInt("smart_cache_depth", 3))); }
+    long smartCacheMaxTrackBytes() { return Math.max(64L * 1024L * 1024L, Math.min(512L * 1024L * 1024L, cacheBytes() / 4)); }
     String startTab() { return values.getString("start_tab", "liked"); }
     String lastTab() { return values.getString("last_tab", "liked"); }
     String wifiQuality() { return values.getString("wifi_quality", "original"); }
@@ -20,5 +24,6 @@ final class AppSettings {
     boolean loudnessNormalization() { return values.getBoolean("loudness_normalization", false); }
     void putBoolean(String key, boolean value) { values.edit().putBoolean(key, value).apply(); }
     void putLong(String key, long value) { values.edit().putLong(key, value).apply(); }
+    void putInt(String key, int value) { values.edit().putInt(key, value).apply(); }
     void putString(String key, String value) { values.edit().putString(key, value).apply(); }
 }

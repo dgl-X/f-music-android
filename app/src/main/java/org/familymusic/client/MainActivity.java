@@ -75,6 +75,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.IntConsumer;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 
@@ -90,6 +92,8 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
     private ImageLoader images;
     private OfflineStore offline;
     private AppSettings settings;
+    private SmartCacheCatalog smartCacheCatalog;
+    private final ExecutorService smartCacheCatalogExecutor = Executors.newSingleThreadExecutor();
     private TrackAdapter adapter;
     private TextView status;
     private TextView nowPlaying;
@@ -191,8 +195,6 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
     private final Map<String, Integer> catalogScrollPositions = new HashMap<>();
     private final Set<String> downloadsInProgress = new HashSet<>();
     private String lastPlayingId = "";
-    private String lastPlaybackErrorMediaId = "";
-    private long lastPlaybackErrorAt;
 
     @Override protected void onCreate(@Nullable Bundle state) {
         super.onCreate(state);
@@ -200,6 +202,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         images = new ImageLoader(this);
         offline = new OfflineStore(this);
         settings = new AppSettings(this);
+        smartCacheCatalog = new SmartCacheCatalog(this);
         connectManager = new ConnectManager(this, api, new ConnectManager.Listener() {
             @Override public void command(String action, JSONObject payload, ConnectManager.Completion completion) { handleConnectCommand(action, payload, completion); }
             @Override public void state(JSONObject state) { applyConnectState(state); }
@@ -221,7 +224,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         }
         if (api.hasSession()) {
             UploadService.resume(this);
-            if (offline.hasTracks()) {
+            if (offline.hasTracks() || smartCacheCatalog.hasEntries()) {
                 downloadedOnly = true; likedOnly = false; showLibrary();
                 api.get("/me", new UiCallback() {
                     @Override void ok(JSONObject json) { downloadedOnly = false; likedOnly = true; updateTabs(); loadTracks(); }
@@ -240,8 +243,8 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         api.get("/me", new UiCallback() {
             @Override void ok(JSONObject json) { showLibrary(); }
             @Override void fail(String message) {
-                if (offline.hasTracks()) { downloadedOnly = true; likedOnly = false; showLibrary(); }
-                else { showLibrary(); toast("Не удалось проверить сессию — повторим при появлении сети"); }
+                if (offline.hasTracks() || smartCacheCatalog.hasEntries()) { downloadedOnly = true; likedOnly = false; showLibrary(); }
+                else showLibrary();
             }
             @Override void failStatus(int status, String message) {
                 if (ApiClient.isAuthenticationFailure(status)) { api.clearSession(); showLogin(); }
@@ -353,7 +356,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         allButton = navItem(R.drawable.ic_nav_tracks, "Треки");
         albumsButton = navItem(R.drawable.ic_nav_album, "Каталог");
         playlistsButton = navItem(R.drawable.ic_nav_playlist, "Плейлисты");
-        downloadedButton = navItem(R.drawable.ic_nav_download, "Скачано");
+        downloadedButton = navItem(R.drawable.ic_nav_download, "Офлайн");
         historyButton = navItem(R.drawable.ic_nav_history, "История");
         tabs.addView(likedButton, new LinearLayout.LayoutParams(0, dp(58), 1));
         tabs.addView(allButton, new LinearLayout.LayoutParams(0, dp(58), 1));
@@ -626,11 +629,17 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         addToggle(content, "Автосохранение лайков", "Хранить понравившиеся без интернета", settings.autoSaveLikes(), value -> settings.putBoolean("auto_save_likes", value));
         addSetting(content, "Когда сохранять", settings.autoSaveMode().equals("immediately") ? "Сразу после лайка" : "После прослушивания", () -> openSetting(this::chooseAutoSaveMode));
         addToggle(content, "Только по Wi‑Fi", "Для автоматических сохранений", settings.autoSaveWifiOnly(), value -> settings.putBoolean("auto_save_wifi_only", value));
-        addSetting(content, "Размер кэша", sizeName(settings.cacheBytes()), () -> openSetting(this::chooseCacheSize));
-        addSetting(content, "Предзагрузка двух следующих · на трек", sizeName(settings.prefetchBytes()), () -> openSetting(this::choosePrefetchSize));
+        addToggle(content, "Smart Cache", "Хранить недавно прослушанные треки", settings.smartCacheEnabled(), value -> settings.putBoolean("smart_cache_enabled", value));
+        addToggle(content, "Smart Cache только по Wi‑Fi", "Фоновая догрузка целого трека", settings.smartCacheWifiOnly(), value -> settings.putBoolean("smart_cache_wifi_only", value));
+        addSetting(content, "Размер Smart Cache", sizeName(settings.cacheBytes()), () -> openSetting(this::chooseCacheSize));
+        addSetting(content, "Следующих треков", settings.smartCacheDepth() + " · предзагрузка по " + sizeName(settings.prefetchBytes()), () -> openSetting(this::chooseSmartCacheDepth));
+        addSetting(content, "Объём начала трека", sizeName(settings.prefetchBytes()), () -> openSetting(this::choosePrefetchSize));
         addSetting(content, "Скачать «Мне нравится»", likedDownloadSummary(), () -> openSetting(this::confirmDownloadLiked));
         addSetting(content, "Загрузки и офлайн", downloadsInProgress.size() + " активных · " + offline.all().size() + " сохранено", () -> openSetting(this::showDownloadManager));
-        addSetting(content, "Хранилище и очистка", humanBytes(PlaybackCache.get(this).sizeBytes() + offline.sizeBytes()), () -> openSetting(this::showStorageSettings));
+        SmartCacheStats cacheStats = new SmartCacheStats(this);
+        String cacheSummary = humanBytes(PlaybackCache.get(this).sizeBytes() + offline.sizeBytes())
+                + " · попаданий " + cacheStats.hitPercent() + "%";
+        addSetting(content, "Хранилище и очистка", cacheSummary, () -> openSetting(this::showStorageSettings));
         addSection(content, "ИНТЕРФЕЙС И ВОСПРОИЗВЕДЕНИЕ");
         addSetting(content, "Стартовый раздел", startTabName(settings.startTab()), () -> openSetting(this::chooseStartTab));
         addSetting(content, "Таймер сна", sleepTimerName(), () -> openSetting(this::chooseSleepTimer));
@@ -709,7 +718,14 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         long mb = 1024L * 1024L;
         long[] sizes = {512 * mb, 1024 * mb, 2048 * mb, 5120 * mb, 10240 * mb};
         int selected = 0; for (int i = 0; i < sizes.length; i++) if (sizes[i] == settings.cacheBytes()) selected = i;
-        showChoiceScreen("Размер кэша", names, selected, i -> { settings.putLong("cache_bytes", sizes[i]); toast("Новый лимит полностью применится после перезапуска приложения"); showSettings(); });
+        showChoiceScreen("Размер Smart Cache", names, selected, i -> { settings.putLong("cache_bytes", sizes[i]); toast("Новый лимит полностью применится после перезапуска приложения"); showSettings(); });
+    }
+
+    private void chooseSmartCacheDepth() {
+        String[] names = {"1 следующий трек", "2 следующих трека", "3 следующих трека", "5 следующих треков"};
+        int[] values = {1, 2, 3, 5}; int selected = 0;
+        for (int i = 0; i < values.length; i++) if (values[i] == settings.smartCacheDepth()) selected = i;
+        showChoiceScreen("Глубина Smart Cache", names, selected, i -> { settings.putInt("smart_cache_depth", values[i]); showSettings(); });
     }
 
     private void chooseAutoSaveMode() {
@@ -720,11 +736,11 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         String[] names = {"Выключена", "1 МБ", "3 МБ", "5 МБ", "8 МБ"}; long mb = 1024L * 1024L;
         long[] sizes = {0, mb, 3 * mb, 5 * mb, 8 * mb};
         int selected = 0; for (int i = 0; i < sizes.length; i++) if (sizes[i] == settings.prefetchBytes()) selected = i;
-        showChoiceScreen("Предзагрузка", names, selected, i -> { settings.putLong("prefetch_bytes", sizes[i]); showSettings(); });
+        showChoiceScreen("Объём начала трека", names, selected, i -> { settings.putLong("prefetch_bytes", sizes[i]); showSettings(); });
     }
 
     private void chooseStartTab() {
-        String[] names = {"Мне нравится", "Все треки", "Скачано", "Последний раздел"};
+        String[] names = {"Мне нравится", "Все треки", "Офлайн", "Последний раздел"};
         String[] values = {"liked", "all", "downloaded", "last"};
         showChoiceScreen("Стартовый раздел", names, java.util.Arrays.asList(values).indexOf(settings.startTab()), i -> { settings.putString("start_tab", values[i]); showSettings(); });
     }
@@ -740,9 +756,19 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
 
     private void showStorageSettings() {
         long cache = PlaybackCache.get(this).sizeBytes(), saved = offline.sizeBytes();
-        String[] actions = {"Очистить временный кэш · " + humanBytes(cache), "Удалить скачанные треки · " + humanBytes(saved)};
+        int complete = PlaybackCache.get(this).completeTrackCount();
+        int knownSmartTracks = smartCacheCatalog.lastAvailableCount();
+        int smartTracks = knownSmartTracks >= 0 ? knownSmartTracks : complete;
+        int downloadedTracks = offline.all().size();
+        SmartCacheStats stats = new SmartCacheStats(this);
+        String[] actions = {"Smart Cache · " + humanBytes(cache) + " · " + smartTracks + " треков (" + complete + " версий)",
+                "Эффективность · " + stats.cacheHits() + " из " + stats.meaningfulListens() + " · " + stats.hitPercent() + "%",
+                "Офлайн-переходы · " + stats.offlineSkips() + " пропущено · " + stats.offlineStops() + " остановок",
+                "Скачано вручную · " + downloadedTracks + " · " + humanBytes(saved)};
         showChoiceScreen("Хранилище · " + humanBytes(cache + saved), actions, -1, i -> {
-            if (i == 0) new AlertDialog.Builder(this).setTitle("Очистить временный кэш?").setMessage("Сохранённые офлайн-треки останутся.").setNegativeButton("Отмена", (x, y) -> showSettings()).setPositiveButton("Очистить", (x, y) -> { PlaybackCache.get(this).clear(); toast("Кэш очищен"); showSettings(); }).show();
+            if (i == 0) new AlertDialog.Builder(this).setTitle("Очистить Smart Cache?").setMessage("Ручные загрузки и сохранённые лайки останутся.").setNegativeButton("Отмена", (x, y) -> showSettings()).setPositiveButton("Очистить", (x, y) -> { PlaybackCache.get(this).clear(); smartCacheCatalog.clear(); toast("Smart Cache очищен"); showSettings(); }).show();
+            else if (i == 1) new AlertDialog.Builder(this).setTitle("Эффективность Smart Cache").setMessage("Попадание засчитывается, когда трек уже целиком находился в Smart Cache и играл не менее 20 секунд. Коротко пролистанные песни не занимают место целиком.").setPositiveButton("Понятно", (x, y) -> showStorageSettings()).show();
+            else if (i == 2) new AlertDialog.Builder(this).setTitle("Офлайн-переходы").setMessage("«Пропущено» — недоступный по сети трек был заменён следующим закэшированным. «Остановок» — в оставшейся очереди не нашлось доступной композиции.").setPositiveButton("Понятно", (x, y) -> showStorageSettings()).show();
             else new AlertDialog.Builder(this).setTitle("Удалить все скачанные треки?").setMessage("Серверная библиотека и лайки останутся.").setNegativeButton("Отмена", (x, y) -> showSettings()).setPositiveButton("Удалить", (x, y) -> { offline.clearAll(); if (downloadedOnly) loadTracks(); toast("Скачанные треки удалены"); showSettings(); }).show();
         });
     }
@@ -838,7 +864,23 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
                     .put("shuffle", controller.getShuffleModeEnabled()).put("repeat", controller.getRepeatMode()).put("has_next", controller.hasNextMediaItem());
             details.put("queue", queue);
             details.put("network", new JSONObject().put("transport", isWifi() ? "wifi" : "mobile_or_other"));
-            details.put("storage", new JSONObject().put("cache_bytes", PlaybackCache.get(this).sizeBytes()).put("offline_bytes", offline.sizeBytes()));
+            PlaybackCache playbackCache = PlaybackCache.get(this);
+            SmartCacheStats cacheStats = new SmartCacheStats(this);
+            JSONObject smartCache = new JSONObject()
+                    .put("enabled", settings.smartCacheEnabled())
+                    .put("wifi_only", settings.smartCacheWifiOnly())
+                    .put("depth", settings.smartCacheDepth())
+                    .put("limit_bytes", settings.cacheBytes())
+                    .put("used_bytes", playbackCache.sizeBytes())
+                    .put("complete_versions", playbackCache.completeTrackCount())
+                    .put("catalog_available", smartCacheCatalog.lastAvailableCount())
+                    .put("meaningful_listens", cacheStats.meaningfulListens())
+                    .put("cache_hits", cacheStats.cacheHits())
+                    .put("offline_skips", cacheStats.offlineSkips())
+                    .put("offline_stops", cacheStats.offlineStops())
+                    .put("current_fully_cached", currentItem != null && playbackCache.isFullyAvailable(currentItem));
+            details.put("smart_cache", smartCache);
+            details.put("storage", new JSONObject().put("cache_bytes", playbackCache.sizeBytes()).put("offline_bytes", offline.sizeBytes()));
             details.put("events", DiagnosticLog.snapshot(this)); report.put("details", details);
         } catch (Exception error) { DiagnosticLog.add(this, "report build error=" + error.getMessage()); }
         return report;
@@ -854,7 +896,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
 
     private String qualityName(String value) { return value.equals("auto") ? "авто" : value.equals("high") ? "AAC 192" : value.equals("compact") ? "AAC 96" : "оригинал"; }
     private String sizeName(long bytes) { if (bytes == 0) return "выключена"; long mb = bytes / 1024 / 1024; return mb >= 1024 ? (mb / 1024) + " ГБ" : mb + " МБ"; }
-    private String startTabName(String value) { return value.equals("all") ? "Все треки" : value.equals("downloaded") ? "Скачано" : value.equals("last") ? "Последний" : "Мне нравится"; }
+    private String startTabName(String value) { return value.equals("all") ? "Все треки" : value.equals("downloaded") ? "Офлайн" : value.equals("last") ? "Последний" : "Мне нравится"; }
     private String humanBytes(long bytes) { if (bytes >= 1024L * 1024 * 1024) return String.format(java.util.Locale.getDefault(), "%.1f ГБ", bytes / 1073741824.0); if (bytes >= 1024L * 1024) return String.format(java.util.Locale.getDefault(), "%.1f МБ", bytes / 1048576.0); return Math.max(0, bytes / 1024) + " КБ"; }
     private String sleepTimerName() { long remaining = settings.sleepDeadline() - System.currentTimeMillis(); if (remaining <= 0) return "Выключен"; return "Осталось около " + Math.max(1, (remaining + 59_999) / 60_000) + " мин"; }
 
@@ -865,7 +907,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         setNavActive(playlistsButton, playlistMode);
         setNavActive(downloadedButton, downloadedOnly);
         setNavActive(historyButton, historyMode);
-        if (pageTitle != null) pageTitle.setText(playlistMode ? activePlaylistTitle : historyMode ? "История" : downloadedOnly ? "Скачано" : likedOnly ? "Мне нравится" : "Все треки");
+        if (pageTitle != null) pageTitle.setText(playlistMode ? activePlaylistTitle : historyMode ? "История" : downloadedOnly ? "Офлайн" : likedOnly ? "Мне нравится" : "Все треки");
         if (sectionBack != null) sectionBack.setVisibility(playlistMode ? View.VISIBLE : View.GONE);
         if (collectionHero != null) collectionHero.setVisibility(!historyMode && !playlistMode && !downloadedOnly && likedOnly ? View.VISIBLE : View.GONE);
     }
@@ -876,18 +918,24 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         if (downloadedOnly) {
             final int generation = trackLoadGeneration;
             final String query = searchQuery.toLowerCase(java.util.Locale.getDefault());
-            status.setText("Читаем скачанную музыку…");
-            offline.listAsync(savedTracks -> runOnUiThread(() -> {
+            status.setText("Проверяем доступную без сети музыку…");
+            smartCacheCatalogExecutor.execute(() -> {
+                List<Track> savedTracks = offline.all();
+                Map<String, Track> available = new java.util.LinkedHashMap<>();
+                for (Track track : savedTracks) available.put(track.id, track);
+                for (Track track : smartCacheCatalog.available(PlaybackCache.get(MainActivity.this))) available.putIfAbsent(track.id, track);
+                runOnUiThread(() -> {
                 if (generation != trackLoadGeneration || !downloadedOnly) return;
                 List<Track> tracks = new ArrayList<>();
-                for (Track track : savedTracks) {
+                for (Track track : available.values()) {
                     String searchable = (track.title + " " + track.artist + " " + track.album).toLowerCase(java.util.Locale.getDefault());
                     if (query.isEmpty() || searchable.contains(query)) tracks.add(track);
                 }
                 adapter.setTracks(tracks);
                 trackTotal = tracks.size();
-                status.setText(tracks.isEmpty() ? (query.isEmpty() ? "Скачанных треков пока нет" : "Ничего не найдено") : tracks.size() + " скачано");
-            }));
+                status.setText(tracks.isEmpty() ? (query.isEmpty() ? "Офлайн-треков пока нет" : "Ничего не найдено") : tracks.size() + " доступно без сети");
+                });
+            });
             return;
         }
         if (historyMode) {
@@ -935,9 +983,8 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
             }
             @Override void fail(String message) {
                 if (generation != trackLoadGeneration) return; trackLoading = false;
-                if (offline.hasTracks()) {
+                if (offline.hasTracks() || smartCacheCatalog.hasEntries()) {
                     historyMode = false; playlistMode = false; downloadedOnly = true; likedOnly = false; updateTabs(); loadTracks();
-                    toast("Нет сети — открыты скачанные треки");
                 } else status.setText(message);
             }
         });
@@ -1057,6 +1104,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         }
         queueBuildGeneration++;
         queueSource = sourceName;
+        smartCacheCatalog.rememberAll(tracks, streamQuality());
         List<MediaItem> items = new ArrayList<>();
         playbackTracks.clear();
         int playablePosition = 0;
@@ -1077,7 +1125,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
     }
 
     private String currentQueueSource() {
-        if (downloadedOnly) return "Скачано";
+        if (downloadedOnly) return "Офлайн";
         if (historyMode) return "Недавно слушали";
         if (playlistMode) return "Плейлист · " + activePlaylistTitle;
         if (!searchQuery.isEmpty()) return "Поиск · " + searchQuery;
@@ -1338,7 +1386,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         if (!localCover.isEmpty()) metadata.setArtworkUri(Uri.parse(localCover));
         else if (!track.coverUrl.isEmpty()) metadata.setArtworkUri(Uri.parse(ApiClient.ORIGIN + track.coverUrl));
         boolean local = offline.contains(track.id);
-        String requestedQuality = streamQuality(), quality = playbackQuality(track, requestedQuality);
+        String requestedQuality = streamQuality(), quality = track.cachedQuality.isEmpty() ? playbackQuality(track, requestedQuality) : track.cachedQuality;
         String prepare = quality.equals("original") && !requestedQuality.equals("original") ? "&prepare=" + Uri.encode(requestedQuality.equals("compact") ? "aac_96" : "aac_192") : "";
         String streamPath = track.streamPath(quality);
         if (!track.remote) streamPath += prepare;
@@ -1364,6 +1412,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
 
     private void playNext(Track track, int position) {
         if (controller == null || controller.getCurrentMediaItem() == null) { play(track, position); return; }
+        smartCacheCatalog.remember(track, track.cachedQuality.isEmpty() ? playbackQuality(track, streamQuality()) : track.cachedQuality);
         controller.addMediaItem(controller.getCurrentMediaItemIndex() + 1, mediaItemFor(track));
         toast("Будет играть следующим");
     }
@@ -1527,20 +1576,15 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
                         if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO && !lastPlayingId.isEmpty()) saveListenedLikedTrack(lastPlayingId);
                         if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO && mediaItem != null) recordHistory(mediaItem.mediaId);
                         lastPlayingId = mediaItem == null ? "" : mediaItem.mediaId;
-                        lastPlaybackErrorMediaId = "";
                         updatePlayer();
                     }
                     @Override public void onPlaybackStateChanged(int state) {
                         if (state == Player.STATE_ENDED && !lastPlayingId.isEmpty()) saveListenedLikedTrack(lastPlayingId);
                     }
                     @Override public void onPlayerError(@NonNull PlaybackException error) {
-                        String mediaId = controller.getCurrentMediaItem() == null ? "" : controller.getCurrentMediaItem().mediaId;
-                        long now = System.currentTimeMillis();
-                        if (!mediaId.equals(lastPlaybackErrorMediaId) || now - lastPlaybackErrorAt > 12_000) {
-                            lastPlaybackErrorMediaId = mediaId;
-                            lastPlaybackErrorAt = now;
-                            toast("Не удалось загрузить трек — пробуем снова");
-                        }
+                        // PlaybackService retries, skips to cached media or pauses when no
+                        // continuation exists. A transient source error is therefore not a
+                        // user-facing failure and must not produce a recurring bottom toast.
                     }
                     @Override public void onEvents(Player player, Player.Events events) { if (stateRestored) scheduleStateSave(); }
                 });
@@ -1594,12 +1638,13 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
                 api.post("/tracks/resolve", resolveBody, new UiCallback() {
                     @Override void ok(JSONObject library) {
                         JSONArray items = library.optJSONArray("items");
-                        List<MediaItem> restored = new ArrayList<>(); String currentId = saved.optString("track_id", ""); int currentIndex = 0;
+                        List<MediaItem> restored = new ArrayList<>(); List<Track> restoredTracks = new ArrayList<>(); String currentId = saved.optString("track_id", ""); int currentIndex = 0;
                         playbackTracks.clear();
                         if (items != null) for (int i = 0; i < items.length(); i++) {
                             Track track = new Track(items.optJSONObject(i));
-                            if (track.id.equals(currentId)) currentIndex = restored.size(); restored.add(mediaItemFor(track));
+                            if (track.id.equals(currentId)) currentIndex = restored.size(); restoredTracks.add(track); restored.add(mediaItemFor(track));
                         }
+                        smartCacheCatalog.rememberAll(restoredTracks, streamQuality());
                         if (!restored.isEmpty() && controller != null) {
                             String repeat = saved.optString("repeat_mode", "off");
                             controller.setRepeatMode(repeat.equals("one") ? Player.REPEAT_MODE_ONE : repeat.equals("all") ? Player.REPEAT_MODE_ALL : Player.REPEAT_MODE_OFF);
@@ -2029,6 +2074,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
             @Override void ok(JSONObject json) {
                 List<Track> tracks = tracksFrom(json); int currentIndex = 0;
                 for (int i = 0; i < tracks.size(); i++) if (tracks.get(i).id.equals(currentId)) { currentIndex = i; break; }
+                smartCacheCatalog.rememberAll(tracks, streamQuality());
                 List<MediaItem> items = new ArrayList<>(); playbackTracks.clear();
                 for (Track track : tracks) { playbackTracks.put(track.id, track); items.add(mediaItemFor(track)); }
                 if (items.isEmpty()) return;
@@ -2143,7 +2189,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         if (controllerFuture != null) { MediaController.releaseFuture(controllerFuture); controllerFuture = null; }
     }
 
-    @Override protected void onDestroy() { if(connectManager!=null)connectManager.stop();disconnectController(); super.onDestroy(); }
+    @Override protected void onDestroy() { if(connectManager!=null)connectManager.stop();disconnectController();smartCacheCatalogExecutor.shutdownNow(); super.onDestroy(); }
 
     @Override protected void onStart() {
         super.onStart();

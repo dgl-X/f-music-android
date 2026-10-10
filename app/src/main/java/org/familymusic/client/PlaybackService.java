@@ -22,7 +22,10 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.extractor.DefaultExtractorsFactory;
 import androidx.media3.session.MediaSession;
 import androidx.media3.session.MediaSessionService;
+import androidx.media3.session.SessionResult;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -38,6 +41,7 @@ public final class PlaybackService extends MediaSessionService {
     private String cookie;
     private final Handler sleepHandler = new Handler(Looper.getMainLooper());
     private final Handler prefetchHandler = new Handler(Looper.getMainLooper());
+    private final Handler smartCacheHandler = new Handler(Looper.getMainLooper());
     private final Handler retryHandler = new Handler(Looper.getMainLooper());
     private final Runnable sleepPause = () -> { if (mediaSession != null) mediaSession.getPlayer().pause(); new AppSettings(this).putLong("sleep_deadline", 0); };
     private LoudnessEnhancer loudnessEnhancer;
@@ -47,6 +51,7 @@ public final class PlaybackService extends MediaSessionService {
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
     private final NetworkLogGuard networkLogGuard = new NetworkLogGuard();
+    private String countedSmartCacheMediaId = "";
 
     @Override public void onCreate() {
         super.onCreate();
@@ -68,9 +73,13 @@ public final class PlaybackService extends MediaSessionService {
         player.addListener(new Player.Listener() {
             @Override public void onMediaItemTransition(@Nullable MediaItem mediaItem, int reason) {
                 retryHandler.removeCallbacksAndMessages(null);
+                smartCacheHandler.removeCallbacksAndMessages(null);
+                countedSmartCacheMediaId = "";
                 retryGuard.transition(mediaItem == null ? "" : mediaItem.mediaId);
                 DiagnosticLog.add(PlaybackService.this, "transition reason=" + reason + " track=" + (mediaItem == null ? "none" : mediaItem.mediaId) + " index=" + player.getCurrentMediaItemIndex());
                 schedulePrefetch(player);
+                scheduleMeaningfulListen(player);
+                skipUnavailableOfflineTransition(player, mediaItem, reason);
                 applyNormalization(player);
             }
             @Override public void onAudioSessionIdChanged(int id) { audioSessionId=id; recreateLoudnessEnhancer(); applyNormalization(player); }
@@ -83,11 +92,12 @@ public final class PlaybackService extends MediaSessionService {
                 schedulePrefetch(player);
             }
             @Override public void onIsPlayingChanged(boolean isPlaying) {
-                if (isPlaying) schedulePrefetch(player);
-                else { prefetchHandler.removeCallbacksAndMessages(null); cancelPrefetch(); }
+                if (isPlaying) { schedulePrefetch(player); scheduleMeaningfulListen(player); }
+                else { prefetchHandler.removeCallbacksAndMessages(null); smartCacheHandler.removeCallbacksAndMessages(null); cancelPrefetch(); }
             }
             @Override public void onPositionDiscontinuity(Player.PositionInfo oldPosition, Player.PositionInfo newPosition, int reason) {
                 DiagnosticLog.add(PlaybackService.this, "position discontinuity reason=" + discontinuityName(reason) + " from=" + oldPosition.positionMs + " to=" + newPosition.positionMs + " oldTrack=" + oldPosition.mediaItemIndex + " newTrack=" + newPosition.mediaItemIndex);
+                if (reason == Player.DISCONTINUITY_REASON_SEEK || reason == Player.DISCONTINUITY_REASON_SEEK_ADJUSTMENT) schedulePrefetch(player);
                 if (!restoringPosition && reason == Player.DISCONTINUITY_REASON_INTERNAL
                         && oldPosition.mediaItemIndex == newPosition.mediaItemIndex
                         && oldPosition.positionMs > 10_000 && newPosition.positionMs + 5_000 < oldPosition.positionMs) {
@@ -115,6 +125,27 @@ public final class PlaybackService extends MediaSessionService {
                 cancelPrefetch();
                 MediaItem current = player.getCurrentMediaItem();
                 String mediaId = current == null ? "" : current.mediaId;
+                boolean validatedNetwork = hasValidatedNetwork();
+                int cachedIndex = validatedNetwork ? C.INDEX_UNSET : nextCachedIndex(player);
+                SmartCachePolicy.OfflineAction offlineError = SmartCachePolicy.sourceErrorAction(validatedNetwork, cachedIndex != C.INDEX_UNSET);
+                if (offlineError != SmartCachePolicy.OfflineAction.KEEP) {
+                    if (offlineError == SmartCachePolicy.OfflineAction.SKIP && cachedIndex != C.INDEX_UNSET) {
+                        boolean playWhenReady = player.getPlayWhenReady();
+                        MediaItem cached = player.getMediaItemAt(cachedIndex);
+                        DiagnosticLog.add(PlaybackService.this, "offline fallback track=" + cached.mediaId + " index=" + cachedIndex);
+                        new SmartCacheStats(PlaybackService.this).recordOfflineSkip();
+                        retryHandler.removeCallbacksAndMessages(null);
+                        retryGuard.transition(cached.mediaId);
+                        player.seekTo(cachedIndex, 0);
+                        player.prepare();
+                        if (playWhenReady) player.play(); else player.pause();
+                    } else {
+                        DiagnosticLog.add(PlaybackService.this, "offline fallback unavailable, pause queue");
+                        new SmartCacheStats(PlaybackService.this).recordOfflineStop();
+                        player.pause();
+                    }
+                    return;
+                }
                 boolean unavailableRemote = isUnavailableRemote(error, mediaId);
                 PlaybackRetryGuard.Decision decision = retryGuard.onError(mediaId, unavailableRemote ? 1 : PlaybackRetryGuard.MAX_ATTEMPTS);
                 if (unavailableRemote) DiagnosticLog.add(PlaybackService.this, "remote node unavailable, short retry track=" + mediaId);
@@ -150,6 +181,17 @@ public final class PlaybackService extends MediaSessionService {
         Intent intent = new Intent(this, MainActivity.class);
         PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         mediaSession = new MediaSession.Builder(this, player)
+            .setCallback(new MediaSession.Callback() {
+                @Override public int onPlayerCommandRequest(MediaSession session, MediaSession.ControllerInfo controller, int command) {
+                    if (command == Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM
+                            || command == Player.COMMAND_SEEK_BACK
+                            || command == Player.COMMAND_SEEK_FORWARD) {
+                        cancelPrefetch();
+                        DiagnosticLog.add(PlaybackService.this, "cancel smart cache before seek command=" + command);
+                    }
+                    return SessionResult.RESULT_SUCCESS;
+                }
+            })
             .setSessionActivity(pendingIntent)
             .setBitmapLoader(new SessionBitmapLoader(this, cookie))
             .build();
@@ -242,21 +284,97 @@ public final class PlaybackService extends MediaSessionService {
     }
 
     private void prefetchNext(ExoPlayer player) {
-        long prefetchBytes = new AppSettings(this).prefetchBytes();
+        AppSettings settings = new AppSettings(this);
+        long prefetchBytes = settings.prefetchBytes();
         if (prefetchBytes <= 0) { cancelPrefetch(); return; }
-        int nextIndex = player.getNextMediaItemIndex();
         MediaItem current = player.getCurrentMediaItem();
-        MediaItem next = nextIndex == C.INDEX_UNSET ? null : player.getMediaItemAt(nextIndex);
-        int secondIndex = nextIndex == C.INDEX_UNSET ? C.INDEX_UNSET : player.getCurrentTimeline().getNextWindowIndex(nextIndex, player.getRepeatMode(), player.getShuffleModeEnabled());
-        MediaItem second = secondIndex == C.INDEX_UNSET || secondIndex == player.getCurrentMediaItemIndex() ? null : player.getMediaItemAt(secondIndex);
+        List<MediaItem> upcoming = upcomingItems(player, settings.smartCacheDepth());
         cancelPrefetch();
         long generation = prefetchGeneration;
-        boolean unmetered = isUnmeteredNetwork();
-        DiagnosticLog.add(this, "prefetch next=" + (next == null ? "none" : next.mediaId) + " second=" + (second == null ? "none" : second.mediaId) + " bytes=" + prefetchBytes + " unmetered=" + unmetered);
+        DiagnosticLog.add(this, "smart cache upcoming=" + upcoming.size() + " bytes=" + prefetchBytes);
         prefetchExecutor.execute(() -> {
-            prefetchPart(next, prefetchBytes, generation);
-            if (unmetered) prefetchComplete(current, generation);
-            prefetchPart(second, prefetchBytes, generation);
+            if (!upcoming.isEmpty()) prefetchPart(upcoming.get(0), prefetchBytes, generation);
+            for (int i = 1; i < upcoming.size(); i++) prefetchPart(upcoming.get(i), prefetchBytes, generation);
+        });
+    }
+
+    private void scheduleMeaningfulListen(ExoPlayer player) {
+        MediaItem current = player.getCurrentMediaItem();
+        if (!player.isPlaying() || current == null || current.mediaId.equals(countedSmartCacheMediaId)) return;
+        String expectedId = current.mediaId;
+        boolean startedCached = PlaybackCache.get(this).isFullyAvailable(current);
+        smartCacheHandler.removeCallbacksAndMessages(null);
+        smartCacheHandler.postDelayed(() -> {
+            MediaItem actual = player.getCurrentMediaItem();
+            if (!player.isPlaying() || actual == null || !expectedId.equals(actual.mediaId)
+                    || expectedId.equals(countedSmartCacheMediaId)) return;
+            countedSmartCacheMediaId = expectedId;
+            new SmartCacheStats(PlaybackService.this).recordMeaningfulListen(startedCached);
+            DiagnosticLog.add(PlaybackService.this, "smart cache meaningful listen track=" + expectedId + " hit=" + startedCached);
+            AppSettings settings = new AppSettings(PlaybackService.this);
+            if (!SmartCachePolicy.mayCompleteTrack(settings.smartCacheEnabled(), settings.smartCacheWifiOnly(), isUnmeteredNetwork())) return;
+            long generation = prefetchGeneration;
+            prefetchExecutor.execute(() -> prefetchComplete(actual, generation, settings.smartCacheMaxTrackBytes()));
+        }, SmartCachePolicy.MEANINGFUL_LISTEN_MS);
+    }
+
+    private List<MediaItem> upcomingItems(ExoPlayer player, int limit) {
+        List<MediaItem> result = new ArrayList<>();
+        int current = player.getCurrentMediaItemIndex(), index = current;
+        int repeatMode = player.getRepeatMode() == Player.REPEAT_MODE_ONE ? Player.REPEAT_MODE_OFF : player.getRepeatMode();
+        for (int checked = 0; checked < player.getMediaItemCount() - 1 && result.size() < limit && index != C.INDEX_UNSET; checked++) {
+            index = player.getCurrentTimeline().getNextWindowIndex(index, repeatMode, player.getShuffleModeEnabled());
+            if (index == C.INDEX_UNSET || index == current) break;
+            MediaItem item = player.getMediaItemAt(index);
+            if (!result.contains(item)) result.add(item);
+        }
+        return result;
+    }
+
+    private int nextCachedIndex(ExoPlayer player) {
+        int current = player.getCurrentMediaItemIndex(), index = current;
+        int repeatMode = player.getRepeatMode() == Player.REPEAT_MODE_ONE ? Player.REPEAT_MODE_OFF : player.getRepeatMode();
+        for (int checked = 0; checked < player.getMediaItemCount() - 1; checked++) {
+            index = player.getCurrentTimeline().getNextWindowIndex(index, repeatMode, player.getShuffleModeEnabled());
+            if (index == C.INDEX_UNSET || index == current) return C.INDEX_UNSET;
+            if (PlaybackCache.get(this).isFullyAvailable(player.getMediaItemAt(index))) return index;
+        }
+        return C.INDEX_UNSET;
+    }
+
+    private void skipUnavailableOfflineTransition(ExoPlayer player, @Nullable MediaItem transitioned, int reason) {
+        if (connectivityManager == null || transitioned == null) return;
+        // Do not interrupt a track which was already playing when connectivity
+        // disappeared. Its Media3 buffer and partial cache may still last until
+        // the network returns; the error handler performs the fallback later.
+        boolean eligibleTransition = reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO
+                || reason == Player.MEDIA_ITEM_TRANSITION_REASON_SEEK
+                || reason == Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED;
+        if (!eligibleTransition) return;
+        SmartCachePolicy.OfflineAction initialAction = SmartCachePolicy.transitionAction(
+                hasValidatedNetwork(), PlaybackCache.get(this).isFullyAvailable(transitioned), true, true);
+        if (initialAction == SmartCachePolicy.OfflineAction.KEEP) return;
+        String expectedId = transitioned.mediaId;
+        prefetchHandler.post(() -> {
+            MediaItem actual = player.getCurrentMediaItem();
+            if (actual == null || !expectedId.equals(actual.mediaId) || hasValidatedNetwork()
+                    || PlaybackCache.get(PlaybackService.this).isFullyAvailable(actual)) return;
+            int cachedIndex = nextCachedIndex(player);
+            SmartCachePolicy.OfflineAction action = SmartCachePolicy.transitionAction(false, false, true, cachedIndex != C.INDEX_UNSET);
+            if (action == SmartCachePolicy.OfflineAction.PAUSE) {
+                DiagnosticLog.add(PlaybackService.this, "offline transition has no cached continuation track=" + expectedId);
+                new SmartCacheStats(PlaybackService.this).recordOfflineStop();
+                player.pause();
+                return;
+            }
+            boolean playWhenReady = player.getPlayWhenReady();
+            MediaItem cached = player.getMediaItemAt(cachedIndex);
+            DiagnosticLog.add(PlaybackService.this, "offline transition skip=" + expectedId + " cached=" + cached.mediaId + " index=" + cachedIndex);
+            new SmartCacheStats(PlaybackService.this).recordOfflineSkip();
+            retryGuard.transition(cached.mediaId);
+            player.seekTo(cachedIndex, 0);
+            player.prepare();
+            if (playWhenReady) player.play(); else player.pause();
         });
     }
 
@@ -266,9 +384,9 @@ public final class PlaybackService extends MediaSessionService {
         runPrefetch(writer, generation);
     }
 
-    private void prefetchComplete(MediaItem item, long generation) {
+    private void prefetchComplete(MediaItem item, long generation, long maxTrackBytes) {
         if (item == null || generation != prefetchGeneration) return;
-        CacheWriter writer = PlaybackCache.get(this).completeWriter(item, cookie, 64L * 1024L * 1024L);
+        CacheWriter writer = PlaybackCache.get(this).completeWriter(item, cookie, maxTrackBytes);
         runPrefetch(writer, generation);
     }
 
@@ -284,6 +402,13 @@ public final class PlaybackService extends MediaSessionService {
         Network network = connectivityManager.getActiveNetwork();
         NetworkCapabilities capabilities = network == null ? null : connectivityManager.getNetworkCapabilities(network);
         return capabilities != null && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED);
+    }
+
+    private boolean hasValidatedNetwork() {
+        if (connectivityManager == null) return false;
+        Network network = connectivityManager.getActiveNetwork();
+        NetworkCapabilities capabilities = network == null ? null : connectivityManager.getNetworkCapabilities(network);
+        return capabilities != null && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
     }
 
     private void cancelPrefetch() {
@@ -311,6 +436,7 @@ public final class PlaybackService extends MediaSessionService {
     @Override public void onDestroy() {
         cancelPrefetch();
         prefetchHandler.removeCallbacksAndMessages(null);
+        smartCacheHandler.removeCallbacksAndMessages(null);
         retryHandler.removeCallbacksAndMessages(null);
         sleepHandler.removeCallbacks(sleepPause);
         prefetchExecutor.shutdownNow();

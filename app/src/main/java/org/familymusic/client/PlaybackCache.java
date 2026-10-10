@@ -102,6 +102,35 @@ final class PlaybackCache {
 
     long sizeBytes() { return cache.getCacheSpace(); }
 
+    boolean isFullyAvailable(MediaItem item) {
+        MediaItem.LocalConfiguration local = item == null ? null : item.localConfiguration;
+        if (local == null) return false;
+        String scheme = local.uri.getScheme();
+        if (!"http".equals(scheme) && !"https".equals(scheme)) return true;
+        String key = local.customCacheKey;
+        if (key == null || !key.startsWith(CACHE_PREFIX)) return false;
+        long length = ContentMetadata.getContentLength(cache.getContentMetadata(key));
+        return length > 0 && cache.getCachedBytes(key, 0, length) >= length;
+    }
+
+    boolean isFullyAvailable(String trackId, String quality) {
+        String key = key(trackId, quality);
+        long length = ContentMetadata.getContentLength(cache.getContentMetadata(key));
+        return length > 0 && cache.getCachedBytes(key, 0, length) >= length;
+    }
+
+    java.util.Set<String> cachedKeys() { return new java.util.HashSet<>(cache.getKeys()); }
+
+    int completeTrackCount() {
+        int count = 0;
+        for (String key : new java.util.HashSet<>(cache.getKeys())) {
+            if (!key.startsWith(CACHE_PREFIX)) continue;
+            long length = ContentMetadata.getContentLength(cache.getContentMetadata(key));
+            if (length > 0 && cache.getCachedBytes(key, 0, length) >= length) count++;
+        }
+        return count;
+    }
+
     void remove(MediaItem item) {
         MediaItem.LocalConfiguration local = item == null ? null : item.localConfiguration;
         String key = local == null ? null : local.customCacheKey;

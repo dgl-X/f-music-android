@@ -24,6 +24,7 @@ final class Track {
     final String sourceLabel;
     final String availability;
     final boolean streamAvailable;
+    String cachedQuality = "";
 
     Track(JSONObject json) {
         id = json.optString("id");
