@@ -31,6 +31,7 @@ import java.util.concurrent.Executors;
 
 @UnstableApi
 public final class PlaybackService extends MediaSessionService {
+    private static volatile PlaybackService activeInstance;
     static final String ACTION_SLEEP_TIMER = BuildConfig.APPLICATION_ID + ".SLEEP_TIMER";
     static final String EXTRA_SLEEP_MINUTES = "minutes";
     static final String ACTION_NORMALIZATION_CHANGED = BuildConfig.APPLICATION_ID + ".NORMALIZATION_CHANGED";
@@ -55,6 +56,7 @@ public final class PlaybackService extends MediaSessionService {
 
     @Override public void onCreate() {
         super.onCreate();
+        activeInstance = this;
         ApiClient.initialize(this);
         DiagnosticLog.add(this, "playback service created");
         cookie = getSharedPreferences("session", MODE_PRIVATE).getString("cookie", "");
@@ -418,6 +420,20 @@ public final class PlaybackService extends MediaSessionService {
         activePrefetch = null;
     }
 
+    static boolean requestLocalSeek(long positionMs) {
+        PlaybackService service = activeInstance;
+        if (service == null || service.mediaSession == null) return false;
+        long target = Math.max(0, positionMs);
+        new Handler(Looper.getMainLooper()).post(() -> {
+            if (activeInstance != service || service.mediaSession == null) return;
+            service.cancelPrefetch();
+            Player player = service.mediaSession.getPlayer();
+            DiagnosticLog.add(service, "direct local seek to=" + target + " track=" + (player.getCurrentMediaItem() == null ? "none" : player.getCurrentMediaItem().mediaId));
+            player.seekTo(target);
+        });
+        return true;
+    }
+
     @Nullable @Override public MediaSession onGetSession(MediaSession.ControllerInfo controllerInfo) {
         return mediaSession;
     }
@@ -434,6 +450,7 @@ public final class PlaybackService extends MediaSessionService {
     }
 
     @Override public void onDestroy() {
+        if (activeInstance == this) activeInstance = null;
         cancelPrefetch();
         prefetchHandler.removeCallbacksAndMessages(null);
         smartCacheHandler.removeCallbacksAndMessages(null);

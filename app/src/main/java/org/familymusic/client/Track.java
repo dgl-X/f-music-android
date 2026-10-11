@@ -16,6 +16,9 @@ final class Track {
     boolean aac192Ready;
     boolean aac96Ready;
     int playCount;
+    int trackNumber;
+    int discNumber;
+    String artistRole;
     double durationSeconds;
     Double replayGainDb;
     final boolean remote;
@@ -40,6 +43,9 @@ final class Track {
         aac192Ready = json.optBoolean("aac_192_ready", false);
         aac96Ready = json.optBoolean("aac_96_ready", false);
         playCount = json.optInt("play_count", 0);
+        trackNumber = json.optInt("track_number", 0);
+        discNumber = json.optInt("disc_number", 1);
+        artistRole = json.optString("artist_role", "");
         durationSeconds = json.optDouble("duration_seconds", 0);
         replayGainDb = json.isNull("replay_gain_db") || !json.has("replay_gain_db") ? null : json.optDouble("replay_gain_db");
         remote = json.optBoolean("remote", false);
@@ -58,6 +64,8 @@ final class Track {
             json.put("mime_type", mimeType); json.put("liked", liked); json.put("genre", genre);
             json.put("aac_192_ready", aac192Ready); json.put("aac_96_ready", aac96Ready);
             json.put("play_count", playCount);
+            json.put("track_number", trackNumber); json.put("disc_number", discNumber);
+            json.put("artist_role", artistRole);
             json.put("duration_seconds", durationSeconds);
             if (replayGainDb == null) json.put("replay_gain_db", JSONObject.NULL); else json.put("replay_gain_db", replayGainDb);
             if (year == null) json.put("year", JSONObject.NULL); else json.put("year", year);
