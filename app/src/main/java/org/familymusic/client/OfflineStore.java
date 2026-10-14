@@ -72,7 +72,16 @@ final class OfflineStore {
             HttpURLConnection connection = null;
             try {
                 long offset=temporary.isFile()?temporary.length():0;
-                connection = (HttpURLConnection) new URL(ApiClient.ORIGIN + track.streamPath(quality)).openConnection();
+                String source=ApiClient.ORIGIN+track.streamPath(quality);
+                if(!track.remote){
+                    MediaSelection selection=new MediaPlaybackResolver(context).resolve(Uri.parse(source),PlaybackCache.key(track.id,quality),cookie,true);
+                    if(selection!=null)source=selection.url;
+                }
+                String previous=preferences.getString("download_source:"+track.id,"");
+                if(!source.equals(previous))offset=0;
+                preferences.edit().putString("download_source:"+track.id,source).apply();
+                connection = (HttpURLConnection) new URL(source).openConnection();
+                connection.setInstanceFollowRedirects(false);
                 connection.setConnectTimeout(15000);
                 connection.setReadTimeout(60000);
                 connection.setRequestProperty("Cookie", cookie);
@@ -81,6 +90,7 @@ final class OfflineStore {
                 int status = connection.getResponseCode();
                 if (status != 200 && status != 206) throw new Exception("Сервер вернул " + status);
                 if(status==200)offset=0;
+                if(status==206&&(connection.getHeaderField("Content-Range")==null||!connection.getHeaderField("Content-Range").startsWith("bytes "+offset+"-")))throw new Exception("Сервер вернул неверную позицию аудио");
                 long total=connection.getContentLengthLong()>0?offset+connection.getContentLengthLong():-1,written=offset;
                 updateTransfer(track,track.id,"downloading",total>0?(int)Math.min(99,written*100/total):0,"");
                 int lastPercent=-1;
@@ -90,10 +100,12 @@ final class OfflineStore {
                     while ((read = input.read(buffer)) != -1) {if(paused.contains(track.id))throw new DownloadPaused();output.write(buffer,0,read);written+=read;int percent=total>0?(int)Math.min(99,written*100/total):0;if(percent!=lastPercent){lastPercent=percent;updateTransfer(track,track.id,"downloading",percent,"");callback.progress(percent);}}
                     output.getFD().sync();
                 }
+                if(total>0&&written!=total)throw new Exception("Аудиофайл получен не полностью");
                 if (!temporary.renameTo(target)) throw new Exception("Не удалось сохранить файл");
                 downloadCover(track, cookie);
                 saveMetadata(track);
                 clearTransfer(track.id);
+                preferences.edit().remove("download_source:"+track.id).apply();
                 callback.done();
             } catch (DownloadPaused stopped) {
                 updateTransfer(track,track.id,"paused",-1,"");callback.failure("Скачивание приостановлено");

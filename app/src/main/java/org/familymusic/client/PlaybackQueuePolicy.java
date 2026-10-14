@@ -8,6 +8,10 @@ final class PlaybackQueuePolicy {
 
     private PlaybackQueuePolicy() {}
 
+    static int shuffleCurrentIndex(List<String> queueIds, String liveCurrentId) {
+        return liveCurrentId == null ? -1 : queueIds.indexOf(liveCurrentId);
+    }
+
     static SelectionAction selectionAction(List<String> queueIds, String selectedId, String currentSource, String requestedSource) {
         return selectedId != null && queueIds.contains(selectedId)
                 && requestedSource != null && requestedSource.equals(currentSource)

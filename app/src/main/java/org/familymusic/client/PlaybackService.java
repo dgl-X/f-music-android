@@ -36,6 +36,33 @@ public final class PlaybackService extends MediaSessionService {
     static final String EXTRA_SLEEP_MINUTES = "minutes";
     static final String ACTION_NORMALIZATION_CHANGED = BuildConfig.APPLICATION_ID + ".NORMALIZATION_CHANGED";
     private MediaSession mediaSession;
+    private ExoPlayer audioPlayer;
+    private ConnectPlayback connectPlayback;
+    static ConnectManager connectManager(){return activeInstance==null||activeInstance.connectPlayback==null?null:activeInstance.connectPlayback.manager;}
+    static org.json.JSONObject connectSnapshot(){return activeInstance==null||activeInstance.connectPlayback==null?new org.json.JSONObject():activeInstance.connectPlayback.snapshot();}
+    static Track connectTrack(String id){return activeInstance==null||activeInstance.connectPlayback==null?null:activeInstance.connectPlayback.track(id);}
+    static boolean connectPreparing(){return activeInstance!=null&&activeInstance.connectPlayback!=null&&activeInstance.connectPlayback.preparing();}
+    static org.json.JSONObject diagnostics(){
+        org.json.JSONObject result=new org.json.JSONObject();
+        PlaybackService service=activeInstance;ExoPlayer player=service==null?null:service.audioPlayer;
+        if(player==null)return result;
+        try{
+            MediaItem item=player.getCurrentMediaItem();
+            org.json.JSONObject cache=PlaybackCache.get(service).diagnostics(item);
+            result.put("seekable",player.isCurrentMediaItemSeekable()).put("local_state",player.getPlaybackState())
+                .put("local_position_ms",player.getCurrentPosition()).put("local_duration_ms",player.getDuration())
+                .put("cache_content_length",cache.optLong("content_length",-1)).put("cache_cached_bytes",cache.optLong("cached_bytes"))
+                .put("fully_cached",cache.optBoolean("fully_cached")).put("selected_variant",cache.optString("variant"))
+                .put("source_kind",item==null||item.localConfiguration==null?"unknown":DiagnosticDataSource.kind(item.localConfiguration.uri));
+            androidx.media3.common.Format format=player.getAudioFormat();
+            if(format!=null)result.put("audio_mime",format.sampleMimeType).put("container_mime",format.containerMimeType)
+                .put("sample_rate",format.sampleRate).put("channels",format.channelCount).put("pcm_encoding",format.pcmEncoding).put("bitrate",format.averageBitrate);
+        }catch(Exception ignored){}
+        return result;
+    }
+    static boolean requestPrevious(){if(activeInstance==null||activeInstance.connectPlayback==null)return false;activeInstance.connectPlayback.previous();return true;}
+    static void setQueueSource(String source){if(activeInstance!=null&&activeInstance.connectPlayback!=null)activeInstance.connectPlayback.queueSource=source;}
+    static String queueSource(){return activeInstance==null||activeInstance.connectPlayback==null?"":activeInstance.connectPlayback.queueSource;}
     private final ExecutorService prefetchExecutor = Executors.newSingleThreadExecutor();
     private volatile CacheWriter activePrefetch;
     private volatile long prefetchGeneration;
@@ -71,6 +98,7 @@ public final class PlaybackService extends MediaSessionService {
             .setMediaSourceFactory(new DefaultMediaSourceFactory(PlaybackCache.get(this).streamingFactory(cookie), extractors))
             .setLoadControl(loadControl)
             .build();
+        audioPlayer=player;
         player.setHandleAudioBecomingNoisy(true);
         player.addListener(new Player.Listener() {
             @Override public void onMediaItemTransition(@Nullable MediaItem mediaItem, int reason) {
@@ -94,6 +122,7 @@ public final class PlaybackService extends MediaSessionService {
                 schedulePrefetch(player);
             }
             @Override public void onIsPlayingChanged(boolean isPlaying) {
+                DiagnosticLog.add(PlaybackService.this,"isPlaying="+isPlaying+" suppression="+player.getPlaybackSuppressionReason());
                 if (isPlaying) { schedulePrefetch(player); scheduleMeaningfulListen(player); }
                 else { prefetchHandler.removeCallbacksAndMessages(null); smartCacheHandler.removeCallbacksAndMessages(null); cancelPrefetch(); }
             }
@@ -114,7 +143,7 @@ public final class PlaybackService extends MediaSessionService {
                 }
             }
             @Override public void onPlaybackStateChanged(int state) {
-                DiagnosticLog.add(PlaybackService.this, "state=" + state + " playWhenReady=" + player.getPlayWhenReady() + " position=" + player.getCurrentPosition() + " duration=" + player.getDuration());
+                DiagnosticLog.add(PlaybackService.this, "state=" + state + " playWhenReady=" + player.getPlayWhenReady() + " position=" + player.getCurrentPosition() + " duration=" + player.getDuration()+" seekable="+player.isCurrentMediaItemSeekable()+" media="+diagnostics());
                 if (state == Player.STATE_READY && retryGuard.hasAttempts()) {
                     DiagnosticLog.add(PlaybackService.this, "playback recovered track=" + (player.getCurrentMediaItem() == null ? "none" : player.getCurrentMediaItem().mediaId));
                     retryHandler.removeCallbacksAndMessages(null);
@@ -122,11 +151,35 @@ public final class PlaybackService extends MediaSessionService {
                     schedulePrefetch(player);
                 }
             }
+            @Override public void onTimelineChanged(androidx.media3.common.Timeline timeline,int reason){
+                DiagnosticLog.add(PlaybackService.this,"timeline reason="+reason+" items="+player.getMediaItemCount()+" seekable="+player.isCurrentMediaItemSeekable());
+            }
+            @Override public void onPlayWhenReadyChanged(boolean ready,int reason){
+                DiagnosticLog.add(PlaybackService.this,"play intent="+ready+" reason="+reason+" suppression="+player.getPlaybackSuppressionReason());
+            }
+            @Override public void onPlaybackSuppressionReasonChanged(int reason){
+                DiagnosticLog.add(PlaybackService.this,"audio suppression reason="+reason);
+            }
+            @Override public void onTracksChanged(androidx.media3.common.Tracks tracks){
+                for(androidx.media3.common.Tracks.Group group:tracks.getGroups())if(group.getType()==C.TRACK_TYPE_AUDIO){
+                    for(int i=0;i<group.length;i++)if(group.isTrackSelected(i)){
+                        androidx.media3.common.Format f=group.getTrackFormat(i);
+                        DiagnosticLog.add(PlaybackService.this,"audio format mime="+f.sampleMimeType+" container="+f.containerMimeType+" rate="+f.sampleRate+" channels="+f.channelCount+" pcm="+f.pcmEncoding+" bitrate="+f.averageBitrate);
+                    }
+                }
+            }
             @Override public void onPlayerError(androidx.media3.common.PlaybackException error) {
                 DiagnosticLog.add(PlaybackService.this, "player error code=" + error.errorCode + " message=" + error.getMessage() + " cause=" + errorCause(error));
                 cancelPrefetch();
                 MediaItem current = player.getCurrentMediaItem();
                 String mediaId = current == null ? "" : current.mediaId;
+                if(error.errorCode>=3000&&error.errorCode<5000&&PlaybackCache.get(PlaybackService.this).rejectNative(current)){
+                    long position=Math.max(0,player.getCurrentPosition());int index=player.getCurrentMediaItemIndex();
+                    DiagnosticLog.add(PlaybackService.this,"native decoder rejected, select AAC for current track");
+                    MediaItem replacement=current.buildUpon().setUri(current.localConfiguration.uri.buildUpon().appendQueryParameter("compat_retry","1").build()).build();
+                    player.replaceMediaItem(index,replacement);player.seekTo(index,position);player.prepare();
+                    return;
+                }
                 boolean validatedNetwork = hasValidatedNetwork();
                 int cachedIndex = validatedNetwork ? C.INDEX_UNSET : nextCachedIndex(player);
                 SmartCachePolicy.OfflineAction offlineError = SmartCachePolicy.sourceErrorAction(validatedNetwork, cachedIndex != C.INDEX_UNSET);
@@ -180,9 +233,11 @@ public final class PlaybackService extends MediaSessionService {
             }
         });
         registerNetworkLogging();
+        connectPlayback=new ConnectPlayback(this,player);
         Intent intent = new Intent(this, MainActivity.class);
         PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-        mediaSession = new MediaSession.Builder(this, player)
+        ConnectSessionPlayer sessionPlayer=new ConnectSessionPlayer(player,connectPlayback);
+        mediaSession = new MediaSession.Builder(this, sessionPlayer)
             .setCallback(new MediaSession.Callback() {
                 @Override public int onPlayerCommandRequest(MediaSession session, MediaSession.ControllerInfo controller, int command) {
                     if (command == Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM
@@ -427,8 +482,8 @@ public final class PlaybackService extends MediaSessionService {
         new Handler(Looper.getMainLooper()).post(() -> {
             if (activeInstance != service || service.mediaSession == null) return;
             service.cancelPrefetch();
-            Player player = service.mediaSession.getPlayer();
-            DiagnosticLog.add(service, "direct local seek to=" + target + " track=" + (player.getCurrentMediaItem() == null ? "none" : player.getCurrentMediaItem().mediaId));
+            Player player = service.audioPlayer;
+            DiagnosticLog.add(service, "direct local seek to=" + target + " track=" + (player.getCurrentMediaItem() == null ? "none" : player.getCurrentMediaItem().mediaId)+" media="+diagnostics());
             player.seekTo(target);
         });
         return true;
@@ -445,11 +500,12 @@ public final class PlaybackService extends MediaSessionService {
             new AppSettings(this).putLong("sleep_deadline", minutes > 0 ? System.currentTimeMillis() + minutes * 60_000L : 0);
             if (minutes > 0) sleepHandler.postDelayed(sleepPause, minutes * 60_000L);
         }
-        if (intent != null && ACTION_NORMALIZATION_CHANGED.equals(intent.getAction()) && mediaSession != null) applyNormalization((ExoPlayer)mediaSession.getPlayer());
+        if (intent != null && ACTION_NORMALIZATION_CHANGED.equals(intent.getAction()) && audioPlayer != null) applyNormalization(audioPlayer);
         return super.onStartCommand(intent, flags, startId);
     }
 
     @Override public void onDestroy() {
+        if(connectPlayback!=null)connectPlayback.close();
         if (activeInstance == this) activeInstance = null;
         cancelPrefetch();
         prefetchHandler.removeCallbacksAndMessages(null);

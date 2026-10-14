@@ -2,6 +2,7 @@ package org.familymusic.client;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.os.SystemClock;
 
 import org.json.JSONObject;
 
@@ -16,10 +17,11 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-final class ApiClient {
+final class ApiClient implements ConnectApi {
     static volatile String ORIGIN = BuildConfig.SERVER_ORIGIN;
     static volatile String BASE = ORIGIN + "/api/v1";
     private final SharedPreferences preferences;
+    private final Context context;
     private final String deviceName;
     private final String clientName;
     private final ExecutorService executor = Executors.newFixedThreadPool(3);
@@ -31,6 +33,7 @@ final class ApiClient {
     }
 
     ApiClient(Context context) {
+        this.context=context.getApplicationContext();
         preferences = context.getSharedPreferences("session", Context.MODE_PRIVATE);
         deviceName = android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL;
         String version;
@@ -46,7 +49,7 @@ final class ApiClient {
         catch (Exception ignored) { applyOrigin(BuildConfig.SERVER_ORIGIN); }
     }
 
-    String origin() { return ORIGIN; }
+    public String origin() { return ORIGIN; }
 
     void setOrigin(String value) throws Exception {
         String normalized = normalizeOrigin(value);
@@ -76,14 +79,14 @@ final class ApiClient {
     }
 
     boolean hasSession() { return !preferences.getString("cookie", "").isEmpty(); }
-    String cookie() { return preferences.getString("cookie", ""); }
+    public String cookie() { return preferences.getString("cookie", ""); }
     void clearSession() { preferences.edit().remove("cookie").apply(); }
     static boolean isAuthenticationFailure(int status) { return status == 401; }
 
-    void get(String path, Callback callback) { request("GET", path, null, callback); }
-    void post(String path, JSONObject body, Callback callback) { request("POST", path, body, callback); }
+    public void get(String path, Callback callback) { request("GET", path, null, callback); }
+    public void post(String path, JSONObject body, Callback callback) { request("POST", path, body, callback); }
     void patch(String path, JSONObject body, Callback callback) { request("PATCH", path, body, callback); }
-    void put(String path, JSONObject body, Callback callback) { request("PUT", path, body, callback); }
+    public void put(String path, JSONObject body, Callback callback) { request("PUT", path, body, callback); }
     void delete(String path, Callback callback) { request("DELETE", path, null, callback); }
     void putBytes(String path, byte[] body, String mimeType, Callback callback) {
         executor.execute(() -> {
@@ -108,6 +111,7 @@ final class ApiClient {
     private void request(String method, String path, JSONObject body, Callback callback) {
         executor.execute(() -> {
             HttpURLConnection connection = null;
+            long started=SystemClock.elapsedRealtime();
             try {
                 connection = (HttpURLConnection) new URL(BASE + path).openConnection();
                 connection.setRequestMethod(method);
@@ -126,6 +130,7 @@ final class ApiClient {
                     try (OutputStream output = connection.getOutputStream()) { output.write(bytes); }
                 }
                 int status = connection.getResponseCode();
+                if(status>=400||SystemClock.elapsedRealtime()-started>=2000)DiagnosticLog.add(context,"api method="+method+" category="+diagnosticCategory(path)+" status="+status+" elapsed_ms="+(SystemClock.elapsedRealtime()-started));
                 String setCookie = connection.getHeaderField("Set-Cookie");
                 if (setCookie != null && setCookie.startsWith("music_session=")) {
                     String value = setCookie.split(";", 2)[0];
@@ -137,11 +142,21 @@ final class ApiClient {
                 if (status >= 200 && status < 300) callback.success(json);
                 else callback.failure(status, json.optString("error", "Ошибка сервера: " + status));
             } catch (Exception error) {
+                DiagnosticLog.add(context,"api failed category="+diagnosticCategory(path)+" type="+error.getClass().getSimpleName()+" elapsed_ms="+(SystemClock.elapsedRealtime()-started));
                 callback.failure(error.getMessage() == null ? "Ошибка соединения" : error.getMessage());
             } finally {
                 if (connection != null) connection.disconnect();
             }
         });
+    }
+
+    private static String diagnosticCategory(String path){
+        if(path.startsWith("/connect"))return "connect";
+        if(path.startsWith("/login")||path.startsWith("/logout")||path.startsWith("/me")||path.startsWith("/register"))return "account";
+        if(path.startsWith("/reports"))return "report";
+        if(path.startsWith("/uploads"))return "upload";
+        if(path.startsWith("/federation"))return "federation";
+        return "library";
     }
 
     private void addClientHeaders(HttpURLConnection connection) {

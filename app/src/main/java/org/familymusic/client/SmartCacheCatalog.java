@@ -96,7 +96,7 @@ final class SmartCacheCatalog {
                 track.cachedQuality = quality;
                 unique.put(track.id, track);
             }
-            else if (!cachedKeys.contains(PlaybackCache.key(track.id, quality)) && entry.optLong("seen_at", 0) < staleBefore) {
+            else if (!cachedKeys.contains(cache.resolvedKey(PlaybackCache.key(track.id, quality))) && entry.optLong("seen_at", 0) < staleBefore) {
                 items.remove(entryId);
                 changed = true;
             }

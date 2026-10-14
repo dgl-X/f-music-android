@@ -8,14 +8,14 @@ public class QualitySelectorTest {
         assertEquals("original",QualitySelector.playback(true,true,"original"));
     }
 
-    @Test public void compactUsesAac96OnlyWhenReady() {
+    @Test public void compactKeepsRequestedProfileWhileServerPreparesIt() {
         assertEquals("aac_96",QualitySelector.playback(false,true,"compact"));
-        assertEquals("original",QualitySelector.playback(true,false,"compact"));
+        assertEquals("aac_96",QualitySelector.playback(true,false,"compact"));
     }
 
-    @Test public void highAndAutoUseAac192OnlyWhenReady() {
+    @Test public void highAndAutoRemainStableWhenCatalogReadinessIsStale() {
         assertEquals("aac_192",QualitySelector.playback(true,false,"high"));
         assertEquals("aac_192",QualitySelector.playback(true,false,"auto"));
-        assertEquals("original",QualitySelector.playback(false,true,"high"));
+        assertEquals("aac_192",QualitySelector.playback(false,true,"high"));
     }
 }

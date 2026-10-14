@@ -8,6 +8,7 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
+        android:name=".FMusicApplication"
         android:allowBackup="false"
         android:icon="@drawable/ic_launcher"
         android:label="Family Music"

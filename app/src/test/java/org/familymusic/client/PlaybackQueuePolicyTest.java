@@ -6,6 +6,13 @@ import java.util.Arrays;
 import org.junit.Test;
 
 public class PlaybackQueuePolicyTest {
+    @Test public void shuffleUsesTrackPlayingWhenCatalogFinishes() {
+        assertEquals(1, PlaybackQueuePolicy.shuffleCurrentIndex(Arrays.asList("one", "two"), "two"));
+    }
+
+    @Test public void shuffleKeepsExistingQueueIfLiveTrackIsMissingFromCatalog() {
+        assertEquals(-1, PlaybackQueuePolicy.shuffleCurrentIndex(Arrays.asList("one", "two"), "removed"));
+    }
     @Test public void existingTrackReusesCurrentQueueFromTheSameSection() {
         assertEquals(PlaybackQueuePolicy.SelectionAction.REUSE,
                 PlaybackQueuePolicy.selectionAction(Arrays.asList("one", "two"), "two", "Все треки", "Все треки"));

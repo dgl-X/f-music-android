@@ -1,6 +1,7 @@
 package org.familymusic.client;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertArrayEquals;
 
 import java.util.Arrays;
 import java.util.List;
@@ -8,6 +9,9 @@ import org.json.JSONObject;
 import org.junit.Test;
 
 public class ConnectQueueOrderTest {
+    @Test public void shufflePermutationSurvivesHandoffAndMissingTracks(){
+        assertArrayEquals(new int[]{2,0,1},ConnectQueueOrder.permutation(Arrays.asList("a","c","d"),Arrays.asList("d","a","missing","c","d")));
+    }
     private static Track track(String id) throws Exception {
         return new Track(new JSONObject().put("id", id).put("title", id));
     }

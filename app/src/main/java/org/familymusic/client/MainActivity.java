@@ -89,6 +89,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
     private String connectRemoteTrackId = "";
     private long connectRemoteStateReceivedAt;
     private boolean handlingConnectCommand;
+    private boolean connectPreparing;
     private ImageLoader images;
     private OfflineStore offline;
     private AppSettings settings;
@@ -198,16 +199,12 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
 
     @Override protected void onCreate(@Nullable Bundle state) {
         super.onCreate(state);
+        DiagnosticLog.add(this,"activity create restored="+(state!=null));
         api = new ApiClient(this);
         images = new ImageLoader(this);
         offline = new OfflineStore(this);
         settings = new AppSettings(this);
         smartCacheCatalog = new SmartCacheCatalog(this);
-        connectManager = new ConnectManager(this, api, new ConnectManager.Listener() {
-            @Override public void command(String action, JSONObject payload, ConnectManager.Completion completion) { handleConnectCommand(action, payload, completion); }
-            @Override public void state(JSONObject state) { applyConnectState(state); }
-            @Override public void enabled(boolean value) { updatePlayer(); }
-        });
         audioPicker = registerForActivityResult(new ActivityResultContracts.OpenMultipleDocuments(), uris -> {
             if (uris.isEmpty()) return;
             for (Uri uri : uris) {
@@ -558,7 +555,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         bar.addView(previous, new LinearLayout.LayoutParams(dp(38), dp(46)));
         bar.addView(playPause, margin(dp(50), dp(50), 3, 0, 3, 0));
         bar.addView(next, new LinearLayout.LayoutParams(dp(38), dp(46)));
-        previous.setOnClickListener(view -> { if(connectRemoteActive())connectManager.command("previous",new JSONObject());else if (controller != null) controller.seekToPreviousMediaItem(); });
+        previous.setOnClickListener(view -> { if(connectRemoteActive())connectManager.command("previous",new JSONObject());else if (controller != null) seekPrevious(); });
         playPause.setOnClickListener(view -> togglePlayback());
         next.setOnClickListener(view -> skipToNext());
         bar.setOnClickListener(view -> openFullPlayer());
@@ -863,6 +860,8 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
             if (controller != null) player.put("state", controller.getPlaybackState()).put("playing", controller.isPlaying()).put("play_when_ready", controller.getPlayWhenReady())
                     .put("position_ms", controller.getCurrentPosition()).put("duration_ms", controller.getDuration()).put("buffered_ms", controller.getBufferedPosition());
             details.put("player", player);
+            details.put("session",DiagnosticLog.session());
+            details.put("media",PlaybackService.diagnostics());
             JSONObject queue = new JSONObject();
             if (controller != null) queue.put("source", queueSource).put("count", controller.getMediaItemCount()).put("index", controller.getCurrentMediaItemIndex())
                     .put("shuffle", controller.getShuffleModeEnabled()).put("repeat", controller.getRepeatMode()).put("has_next", controller.hasNextMediaItem());
@@ -885,6 +884,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
                     .put("current_fully_cached", currentItem != null && playbackCache.isFullyAvailable(currentItem));
             details.put("smart_cache", smartCache);
             details.put("storage", new JSONObject().put("cache_bytes", playbackCache.sizeBytes()).put("offline_bytes", offline.sizeBytes()));
+            if(connectManager!=null)details.put("connect",connectManager.diagnostics());
             details.put("events", DiagnosticLog.snapshot(this)); report.put("details", details);
         } catch (Exception error) { DiagnosticLog.add(this, "report build error=" + error.getMessage()); }
         return report;
@@ -1090,6 +1090,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
     }
 
     private void startQueue(List<Track> tracks, int position, Track selected, boolean playNow, String sourceName, boolean shuffle) {
+        if(PlaybackService.connectPreparing()){toast("Дождитесь передачи плеера");return;}
         if (connectRemoteActive() && !handlingConnectCommand) {
             JSONObject snapshot = new JSONObject(); JSONArray ids = new JSONArray(); java.util.HashSet<String> addedIds = new java.util.HashSet<>();
             for (Track track : tracks) if ((track.streamAvailable || offline.contains(track.id)) && addedIds.add(track.id)) ids.put(track.id);
@@ -1108,6 +1109,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         }
         queueBuildGeneration++;
         queueSource = sourceName;
+        PlaybackService.setQueueSource(sourceName);
         smartCacheCatalog.rememberAll(tracks, streamQuality());
         List<MediaItem> items = new ArrayList<>();
         playbackTracks.clear();
@@ -1163,6 +1165,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         if (controller == null || controller.getCurrentMediaItem() == null) return null;
         String mediaId = controller.getCurrentMediaItem().mediaId;
         Track current = playbackTracks.get(mediaId);
+        if(current==null)current=PlaybackService.connectTrack(mediaId);
         if (current == null && adapter != null) for (Track track : adapter.tracks()) if (track.id.equals(mediaId)) { current = track; break; }
         return current;
     }
@@ -1395,7 +1398,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         String streamPath = track.streamPath(quality);
         if (!track.remote) streamPath += prepare;
         Uri source = local ? offline.uri(track.id) : Uri.parse(ApiClient.ORIGIN + streamPath);
-        MediaItem.Builder item = new MediaItem.Builder().setMediaId(track.id).setUri(source).setMimeType(local ? track.mimeType : null).setMediaMetadata(metadata.build());
+        MediaItem.Builder item = new MediaItem.Builder().setMediaId(track.id).setUri(source).setMediaMetadata(metadata.build());
         if (!local) item.setCustomCacheKey(PlaybackCache.key(track.id, quality));
         return item.build();
     }
@@ -1592,7 +1595,15 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
                     }
                     @Override public void onEvents(Player player, Player.Events events) { if (stateRestored) scheduleStateSave(); }
                 });
-                restorePlaybackState(); connectManager.start(); updatePlayer();
+                connectManager=PlaybackService.connectManager();
+                if(connectManager!=null)connectManager.observe(new ConnectManager.Listener(){
+                    @Override public void command(String action,JSONObject payload,ConnectManager.Completion completion){}
+                    @Override public void state(JSONObject value){applyConnectState(value);}
+                    @Override public JSONObject snapshot(){return PlaybackService.connectSnapshot();}
+                    @Override public void enabled(boolean value){updatePlayer();}
+                });
+                if(controller.getMediaItemCount()>0)stateRestored=true;else restorePlaybackState();
+                if(connectManager!=null&&!connectManager.enabled())connectManager.start();updatePlayer();
                 stateHandler.removeCallbacks(periodicStateSave); stateHandler.postDelayed(periodicStateSave, 10000);
             } catch (Exception error) { toast("Не удалось подключить плеер"); }
         }, ContextCompat.getMainExecutor(this));
@@ -1678,10 +1689,11 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
 
     private void applyConnectState(JSONObject state) {
         connectState = state;
+        if(connectManager.deviceId().equals(state.optString("active_device_id"))&&!PlaybackService.queueSource().isEmpty())queueSource=PlaybackService.queueSource();
         connectRemoteStateReceivedAt = android.os.SystemClock.elapsedRealtime();
         if (!connectRemoteActive()) { remoteSeekGuard.cancel(); connectRemoteTrack = null; connectRemoteTrackId = ""; updatePlayer(); return; }
         String trackId = state.optString("track_id", "");
-        remoteSeekGuard.observe(Math.round(Math.max(0,state.optDouble("position_seconds"))*1000),state.optBoolean("playing"),trackId,state.optLong("playback_epoch"),connectRemoteStateReceivedAt);
+        remoteSeekGuard.observe(Math.round(Math.max(0,state.optDouble("position_seconds"))*1000),ConnectPlaybackStatus.advances(state),trackId,state.optLong("playback_epoch"),connectRemoteStateReceivedAt);
         if (trackId.isEmpty()) { connectRemoteTrack = null; connectRemoteTrackId = ""; updatePlayer(); return; }
         if (trackId.equals(connectRemoteTrackId)) { updatePlayer(); return; }
         // Keep presenting the previous remote track until the replacement has
@@ -1703,12 +1715,14 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
     private long connectRemotePositionMs() {
         if (connectState == null) return 0;
         long now=android.os.SystemClock.elapsedRealtime(),position = Math.round(Math.max(0, connectState.optDouble("position_seconds")) * 1000);
-        if (connectState.optBoolean("playing")) position += Math.max(0, now - connectRemoteStateReceivedAt);
+        boolean advancing=ConnectPlaybackStatus.advances(connectState);
+        if (advancing) position += Math.max(0, now - connectRemoteStateReceivedAt);
         long duration = Math.round(Math.max(0, connectState.optDouble("duration_seconds")) * 1000);
-        return remoteSeekGuard.position(position,duration,connectState.optBoolean("playing"),connectState.optString("track_id",""),connectState.optLong("playback_epoch"),now);
+        return remoteSeekGuard.position(position,duration,advancing,connectState.optString("track_id",""),connectState.optLong("playback_epoch"),now);
     }
 
     private JSONObject connectPlaybackState() {
+        if(PlaybackService.connectManager()!=null)return PlaybackService.connectSnapshot();
         JSONObject body = new JSONObject(); JSONArray items = new JSONArray();
         try {
             if (controller != null) for (int i=0;i<controller.getMediaItemCount();i++) items.put(controller.getMediaItemAt(i).mediaId);
@@ -1729,46 +1743,6 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         return connectPlaybackState();
     }
 
-    private void handleConnectCommand(String action, JSONObject payload, ConnectManager.Completion completion) {
-        if (controller == null) { completion.finish(false,"Плеер ещё не готов"); return; }
-        if (action.equals("deactivate")) { controller.pause(); completion.finish(true,""); return; }
-        if (action.equals("transfer")) {
-            JSONArray ids=payload.optJSONArray("queue");String currentId=payload.optString("track_id");
-            if(ids==null||ids.length()==0||currentId.isEmpty()){completion.finish(false,"Пустая очередь");return;}
-            JSONObject resolve=new JSONObject();try{resolve.put("ids",ids);}catch(Exception ignored){}
-            api.post("/tracks/resolve",resolve,new UiCallback(){
-                @Override void ok(JSONObject json) {
-                    List<Track> tracks = ConnectQueueOrder.restore(trackIdsFrom(ids), tracksFrom(json));
-                    Track selected = null;
-                    for (Track track : tracks) if (track.id.equals(currentId)) { selected = track; break; }
-                    if (selected == null) { completion.finish(false,"Трек недоступен"); return; }
-                    handlingConnectCommand = true;
-                    try {
-                        startQueue(tracks, 0, selected, payload.optBoolean("playing"), payload.optString("queue_source","Family Music Connect"), payload.optBoolean("shuffle"));
-                        int currentIndex = mediaItemIndex(currentId);
-                        if (currentIndex < 0) { completion.finish(false,"Трек недоступен"); return; }
-                        controller.setRepeatMode(payload.optString("repeat_mode").equals("one") ? Player.REPEAT_MODE_ONE : payload.optString("repeat_mode").equals("all") ? Player.REPEAT_MODE_ALL : Player.REPEAT_MODE_OFF);
-                        controller.seekTo(currentIndex, Math.round(Math.max(0, payload.optDouble("position_seconds")) * 1000));
-                    } finally {
-                        handlingConnectCommand = false;
-                    }
-                    completion.finish(true,"");
-                }
-                @Override void fail(String message){completion.finish(false,message);}
-            });return;
-        }
-        try {
-            switch(action){
-                case "play" -> controller.play(); case "pause" -> controller.pause(); case "next" -> skipToNext(); case "previous" -> controller.seekToPreviousMediaItem();
-                case "seek" -> controller.seekTo(Math.max(0,payload.optLong("position_seconds"))*1000);
-                case "set_shuffle" -> controller.setShuffleModeEnabled(payload.optBoolean("enabled"));
-                case "set_repeat" -> controller.setRepeatMode(payload.optString("mode").equals("one")?Player.REPEAT_MODE_ONE:payload.optString("mode").equals("all")?Player.REPEAT_MODE_ALL:Player.REPEAT_MODE_OFF);
-                case "set_volume" -> controller.setVolume((float)Math.min(1,Math.max(0,payload.optDouble("volume",1))));
-                default -> {completion.finish(false,"Команда не поддерживается");return;}
-            }
-            savePlaybackState();completion.finish(true,"");
-        } catch(Exception error){completion.finish(false,error.getMessage());}
-    }
 
     private void showConnectDevices() {
         if(connectManager==null||!connectManager.enabled()){toast("Family Music Connect выключен");return;}
@@ -1779,6 +1753,8 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
     }
 
     private void savePlaybackState() {
+        if(connectPreparing||PlaybackService.connectPreparing())return;
+        if(connectRemoteActive())return;
         if (!stateRestored || controller == null) return;
         JSONObject body = new JSONObject(); JSONArray queue = new JSONArray();
         try {
@@ -1794,7 +1770,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
             @Override public void success(JSONObject json) {}
             @Override public void failure(String message) {}
         });
-        if (connectManager != null && connectManager.enabled() && !connectRemoteActive()) connectManager.updateState(connectPlaybackState());
+        if (connectManager != null && connectManager.enabled() && !connectRemoteActive() && !connectPreparing) connectManager.updateState(connectPlaybackState());
     }
 
     private void openFullPlayer() {
@@ -1887,7 +1863,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
             if (current == null) toast("Не удалось определить текущий трек");
             else setTrackLiked(current, !current.liked, -1);
         });
-        Runnable playPrevious = () -> { if(connectRemoteActive())connectManager.command("previous",new JSONObject());else controller.seekToPreviousMediaItem(); };
+        Runnable playPrevious = () -> { if(connectRemoteActive())connectManager.command("previous",new JSONObject());else seekPrevious(); };
         Runnable playNext = this::skipToNext;
         previous.setOnClickListener(view -> playPrevious.run());
         fullPlayPause.setOnClickListener(view -> togglePlayback());
@@ -2039,7 +2015,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
             fullRepeat.setContentDescription(repeatMode == Player.REPEAT_MODE_ONE ? "Повтор одного трека" : repeatMode == Player.REPEAT_MODE_ALL ? "Повтор очереди" : "Повтор выключен");
         }
         if (fullQuality != null) {
-            if (remotePlayback) fullQuality.setText("Family Music Connect");
+            if (remotePlayback) fullQuality.setText(connectManager.connection().equals("reconnecting")?"Connect · восстанавливаем связь":connectState.optBoolean("buffering")?"Другое устройство · буферизация":connectState.optBoolean("playing")?"Играет на другом устройстве":"Другое устройство · пауза");
             else {
                 MediaItem item = controller.getCurrentMediaItem(); String quality = streamQuality(), playbackQuality = current == null ? quality : playbackQuality(current,quality), actual = item == null ? "" : PlaybackQualityTracker.variant(PlaybackCache.key(item.mediaId,playbackQuality));
                 if (item != null && item.localConfiguration != null && "file".equals(item.localConfiguration.uri.getScheme())) fullQuality.setText("Офлайн-копия");
@@ -2068,25 +2044,38 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
     }
 
     private void enableGlobalShuffle() {
+        if(connectRemoteActive()){toast("Управляй shuffle кнопкой плеера");return;}
         if (controller == null || controller.getCurrentMediaItem() == null) return;
         if (downloadedOnly || historyMode) { controller.setShuffleModeEnabled(true); updateFullPlayer(); savePlaybackState(); return; }
-        String currentId = controller.getCurrentMediaItem().mediaId; long position = Math.max(0, controller.getCurrentPosition()); boolean playing = controller.isPlaying();
+        final int generation = ++queueBuildGeneration;
         toast("Перемешиваем всю коллекцию…");
         // Media3 owns the single shuffle order. Asking the server for an already
         // randomized queue here used to shuffle it twice and broke intuitive Back.
         api.get("/tracks?sort=newest&queue=1&offset=0&limit=10000", new UiCallback() {
             @Override void ok(JSONObject json) {
-                List<Track> tracks = tracksFrom(json); int currentIndex = 0;
-                for (int i = 0; i < tracks.size(); i++) if (tracks.get(i).id.equals(currentId)) { currentIndex = i; break; }
+                if (generation != queueBuildGeneration || controller == null || controller.getCurrentMediaItem() == null) return;
+                if(connectRemoteActive())return;
+                List<Track> tracks = tracksFrom(json);
+                // Playback continues while the catalog request is in flight.
+                // Preserve the live item and position, not the state at the tap.
+                String currentId = controller.getCurrentMediaItem().mediaId;
+                List<String> ids = new ArrayList<>();
+                for (Track track : tracks) ids.add(track.id);
+                int currentIndex = PlaybackQueuePolicy.shuffleCurrentIndex(ids, currentId);
+                if (currentIndex < 0) {
+                    controller.setShuffleModeEnabled(true); updateFullPlayer(); savePlaybackState(); return;
+                }
                 smartCacheCatalog.rememberAll(tracks, streamQuality());
                 List<MediaItem> items = new ArrayList<>(); playbackTracks.clear();
                 for (Track track : tracks) { playbackTracks.put(track.id, track); items.add(mediaItemFor(track)); }
                 if (items.isEmpty()) return;
+                long position = Math.max(0, controller.getCurrentPosition());
+                boolean playing = controller.getPlayWhenReady();
                 controller.setShuffleModeEnabled(false); controller.setMediaItems(items, currentIndex, position); controller.setShuffleModeEnabled(true); controller.prepare(); if (playing) controller.play();
-                queueSource = "Все треки";
+                queueSource = "Все треки"; PlaybackService.setQueueSource(queueSource);
                 updateFullPlayer(); savePlaybackState(); toast("В shuffle-очереди: " + tracks.size() + " треков");
             }
-            @Override void fail(String message) { controller.setShuffleModeEnabled(true); updateFullPlayer(); toast("Перемешана текущая очередь"); }
+            @Override void fail(String message) { if (generation != queueBuildGeneration || controller == null) return; controller.setShuffleModeEnabled(true); updateFullPlayer(); savePlaybackState(); toast("Перемешана текущая очередь"); }
         });
     }
 
@@ -2095,7 +2084,52 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         return local.isEmpty() ? track.coverUrl : local;
     }
 
+    private void showRemoteQueue() {
+        if(queueDialog!=null)queueDialog.dismiss();
+        final Dialog opened=new Dialog(this);opened.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        queueDialog=opened;
+        final String owner=connectState.optString("active_device_id","");
+        LinearLayout screen=column();screen.setPadding(dp(16),dp(8),dp(16),dp(18));
+        Button close=smallButton("‹ Назад");screen.addView(close,margin(-1,dp(48),0,0,0,8));
+        TextView title=label("Очередь другого устройства",20,Color.WHITE);screen.addView(title);
+        TextView hint=label("Список для просмотра. Управление — кнопками плеера.",13,Color.LTGRAY);screen.addView(hint,margin(-1,-2,0,8,0,8));
+        ScrollView scroll=new ScrollView(this);LinearLayout content=column();scroll.addView(content);
+        screen.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
+        TextView stateLabel=label("",13,Color.LTGRAY);screen.addView(stateLabel);
+        LinearLayout navigation=new LinearLayout(this);
+        Button previous=smallButton("‹ Предыдущие"),next=smallButton("Следующие ›");
+        navigation.addView(previous,new LinearLayout.LayoutParams(0,dp(48),1));
+        navigation.addView(next,new LinearLayout.LayoutParams(0,dp(48),1));screen.addView(navigation);
+        LinearLayout tools=new LinearLayout(this);
+        Button current=smallButton("К текущему"),refresh=smallButton("Обновить");
+        tools.addView(current,new LinearLayout.LayoutParams(0,dp(48),1));
+        tools.addView(refresh,new LinearLayout.LayoutParams(0,dp(48),1));screen.addView(tools);
+        final int[] offset={0};final ConnectRemoteQueue[] model={null};
+        model[0]=new ConnectRemoteQueue(api,connectState,this::runOnUiThread,page->{
+            if(queueDialog!=opened)return;
+            if(!connectRemoteActive()||!owner.equals(connectState.optString("active_device_id",""))){opened.dismiss();return;}
+            offset[0]=page.offset;content.removeAllViews();
+            for(int index=0;index<page.rows.size();index++){
+                ConnectRemoteQueue.Row item=page.rows.get(index);
+                TextView row=label((item.current?"▶   ":"")+(page.offset+index+1)+". "+item.title+(item.artist.isEmpty()?"":"\n"+item.artist),14,Color.WHITE);
+                row.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);row.setMaxLines(2);row.setPadding(dp(12),0,dp(12),0);
+                if(item.current)row.setBackground(round(Color.rgb(72,38,54),14));
+                content.addView(row,margin(-1,dp(66),0,0,0,7));
+            }
+            stateLabel.setText(!page.error.isEmpty()?page.error:page.total==0?"Очередь пуста":(page.offset+1)+"–"+(page.offset+page.rows.size())+" из "+page.total+(page.loading?" · загружаем…":""));
+            previous.setEnabled(page.offset>0);next.setEnabled(page.offset+page.rows.size()<page.total);
+        });
+        previous.setOnClickListener(view->{scroll.scrollTo(0,0);model[0].load(offset[0]-ConnectRemoteQueue.PAGE_SIZE);});
+        next.setOnClickListener(view->{scroll.scrollTo(0,0);model[0].load(offset[0]+ConnectRemoteQueue.PAGE_SIZE);});
+        current.setOnClickListener(view->{scroll.scrollTo(0,0);model[0].load(model[0].currentOffset());});
+        refresh.setOnClickListener(view->showRemoteQueue());close.setOnClickListener(view->opened.dismiss());
+        opened.setContentView(screen);opened.setOnDismissListener(dialog->{model[0].close();if(queueDialog==opened)queueDialog=null;});opened.show();
+        if(opened.getWindow()!=null){opened.getWindow().setLayout(-1,-1);opened.getWindow().setBackgroundDrawableResource(android.R.color.transparent);}
+        applySystemInsets(screen);model[0].load(model[0].currentOffset());
+    }
+
     private void showQueue() {
+        if(connectRemoteActive()){showRemoteQueue();return;}
         if (controller == null || controller.getMediaItemCount() == 0) { toast("Очередь пуста"); return; }
         if (queueDialog != null) queueDialog.dismiss();
         int count = controller.getMediaItemCount();
@@ -2123,6 +2157,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
     }
 
     private void showQueueItemActions(int index) {
+        if(connectRemoteActive()){toast("Это очередь другого устройства");return;}
         List<String> actions = new ArrayList<>();
         actions.add("Играть сейчас"); actions.add("Удалить из очереди");
         if (index > 0) actions.add("Поднять выше");
@@ -2138,6 +2173,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
     }
 
     private void keepOnlyCurrent() {
+        if(connectRemoteActive())return;
         if (controller == null || controller.getMediaItemCount() == 0) return;
         int current = controller.getCurrentMediaItemIndex();
         if (current + 1 < controller.getMediaItemCount()) controller.removeMediaItems(current + 1, controller.getMediaItemCount());
@@ -2147,6 +2183,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
     }
 
     private void togglePlayback() {
+        if(PlaybackService.connectPreparing())return;
         if(connectRemoteActive()){connectManager.command(connectState.optBoolean("playing")?"pause":"play",new JSONObject());return;}
         if (controller == null) return;
         DiagnosticLog.add(this, "user play/pause track=" + (controller.getCurrentMediaItem() == null ? "none" : controller.getCurrentMediaItem().mediaId) + " state=" + controller.getPlaybackState());
@@ -2155,7 +2192,10 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
         updatePlayer();
     }
 
+    private void seekPrevious(){if(!PlaybackService.requestPrevious()&&controller!=null)controller.seekToPreviousMediaItem();}
+
     private void skipToNext() {
+        if(PlaybackService.connectPreparing())return;
         if(connectRemoteActive()){connectManager.command("next",new JSONObject());return;}
         if (controller == null) return;
         DiagnosticLog.add(this, "user next index=" + controller.getCurrentMediaItemIndex() + " count=" + controller.getMediaItemCount() + " hasNext=" + controller.hasNextMediaItem());
@@ -2186,17 +2226,18 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
 
     private void disconnectController() {
         controllerConnectGeneration++;
-        if(connectManager!=null)connectManager.stop();
+        if(connectManager!=null)connectManager.observe(null);
         savePlaybackState();
         stateHandler.removeCallbacksAndMessages(null);
         controller = null;
         if (controllerFuture != null) { MediaController.releaseFuture(controllerFuture); controllerFuture = null; }
     }
 
-    @Override protected void onDestroy() { if(connectManager!=null)connectManager.stop();disconnectController();smartCacheCatalogExecutor.shutdownNow(); super.onDestroy(); }
+    @Override protected void onDestroy() { DiagnosticLog.add(this,"activity destroy");disconnectController();smartCacheCatalogExecutor.shutdownNow(); super.onDestroy(); }
 
     @Override protected void onStart() {
         super.onStart();
+        DiagnosticLog.add(this,"activity start");
         if (!uploadReceiverRegistered) {
             ContextCompat.registerReceiver(this, uploadReceiver, new IntentFilter(UploadService.ACTION_STATUS), ContextCompat.RECEIVER_NOT_EXPORTED);
             uploadReceiverRegistered = true;
@@ -2204,6 +2245,7 @@ public final class MainActivity extends AppCompatActivity implements TrackAdapte
     }
 
     @Override protected void onStop() {
+        DiagnosticLog.add(this,"activity stop");
         savePlaybackState();
         if (uploadReceiverRegistered) { unregisterReceiver(uploadReceiver); uploadReceiverRegistered = false; }
         super.onStop();

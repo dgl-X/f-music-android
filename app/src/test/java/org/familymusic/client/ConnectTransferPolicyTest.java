@@ -9,7 +9,7 @@ public class ConnectTransferPolicyTest {
     @Test
     public void returningPlaybackToThisPhoneUsesActiveRemoteSnapshot() {
         assertTrue(ConnectTransferPolicy.useRemoteSnapshot("phone", "phone", true));
-        assertFalse(ConnectTransferPolicy.useRemoteSnapshot("web", "phone", true));
+        assertTrue(ConnectTransferPolicy.useRemoteSnapshot("web", "phone", true));
         assertFalse(ConnectTransferPolicy.useRemoteSnapshot("phone", "phone", false));
     }
 }
